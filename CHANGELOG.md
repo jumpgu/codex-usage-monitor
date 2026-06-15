@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.1.2 - 2026-06-15
+
+Bugfix release.
+
+- Fix expired 5-hour window fallback so reset time keeps the original minute/second cadence.
+- Stop forcing expired-window usage to 0%, avoiding false `100%` remaining displays.
+
 ## v0.1.1 - 2026-06-15
 
 Polished menu bar release.

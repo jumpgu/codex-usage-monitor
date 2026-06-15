@@ -293,6 +293,22 @@ static NSDate *NextLocalWindowReset(NSDate *now, NSNumber *windowMinutes) {
     return [calendar dateByAddingUnit:NSCalendarUnitMinute value:minutes toDate:hourStart options:0];
 }
 
+static NSDate *NextWindowResetAfterDate(NSDate *now, NSDate *resetDate, NSNumber *windowMinutes) {
+    if (!resetDate) {
+        return NextLocalWindowReset(now, windowMinutes);
+    }
+
+    NSInteger minutes = windowMinutes.integerValue > 0 ? windowMinutes.integerValue : 300;
+    NSTimeInterval windowSeconds = (NSTimeInterval)minutes * 60.0;
+    if ([resetDate compare:now] == NSOrderedDescending) {
+        return resetDate;
+    }
+
+    NSTimeInterval elapsed = [now timeIntervalSinceDate:resetDate];
+    NSInteger windowsToAdd = (NSInteger)floor(elapsed / windowSeconds) + 1;
+    return [resetDate dateByAddingTimeInterval:windowSeconds * windowsToAdd];
+}
+
 static NSDictionary *NormalizeLimitDictionary(NSDictionary *limits, NSDate *now) {
     if (![limits isKindOfClass:NSDictionary.class]) {
         return nil;
@@ -308,8 +324,7 @@ static NSDictionary *NormalizeLimitDictionary(NSDictionary *limits, NSDate *now)
     NSMutableDictionary *normalized = [limits mutableCopy];
     NSMutableDictionary *normalizedPrimary = [primary mutableCopy];
     NSNumber *windowMinutes = NumberOrNil(primary[@"windowMinutes"]) ?: @300;
-    normalizedPrimary[@"usedPercent"] = @0;
-    normalizedPrimary[@"resetsAt"] = LocalISOString(NextLocalWindowReset(now, windowMinutes));
+    normalizedPrimary[@"resetsAt"] = LocalISOString(NextWindowResetAfterDate(now, resetDate, windowMinutes));
     normalizedPrimary[@"windowMinutes"] = windowMinutes;
     normalized[@"primary"] = normalizedPrimary;
     return normalized;
