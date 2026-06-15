@@ -77,9 +77,9 @@ static NSString *LocalISOString(NSDate *date) {
     return [formatter stringFromDate:date];
 }
 
-static NSString *ResetDisplay(NSString *isoString) {
+static NSDate *DisplayDateFromString(NSString *isoString) {
     if (![isoString isKindOfClass:NSString.class]) {
-        return @"--";
+        return nil;
     }
 
     NSDate *date = CodexDateFromString(isoString);
@@ -95,6 +95,24 @@ static NSString *ResetDisplay(NSString *isoString) {
         });
         date = [localParser dateFromString:isoString];
     }
+    return date;
+}
+
+static NSString *ClockDisplay(NSString *isoString) {
+    NSDate *date = DisplayDateFromString(isoString);
+    if (!date) {
+        return @"--";
+    }
+
+    NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
+    formatter.locale = [NSLocale localeWithLocaleIdentifier:@"zh_CN"];
+    formatter.timeZone = [NSTimeZone timeZoneWithName:@"Asia/Shanghai"];
+    formatter.dateFormat = @"HH:mm";
+    return [formatter stringFromDate:date];
+}
+
+static NSString *ResetDisplay(NSString *isoString) {
+    NSDate *date = DisplayDateFromString(isoString);
     if (!date) {
         return @"--";
     }
@@ -830,7 +848,7 @@ static NSString *BucketCompactValue(NSDictionary *bucket) {
     NSDictionary *primary = PrimaryLimit(self.summary);
     NSNumber *primaryPercent = NumberOrNil(primary[@"usedPercent"]);
     NSString *remainingText = RemainingPercentText(primaryPercent);
-    NSString *reset = ResetDisplay(StringOrNil(primary[@"resetsAt"]));
+    NSString *reset = ClockDisplay(StringOrNil(primary[@"resetsAt"]));
     NSString *statusTitle = [NSString stringWithFormat:@"%@ %@", remainingText, reset];
     if (primaryPercent) {
         double remaining = RemainingPercentValue(primaryPercent);
@@ -1013,7 +1031,7 @@ static NSString *BucketCompactValue(NSDictionary *bucket) {
                                                  valueColor:UsageColorForRemaining(remaining)
                                                  emphasized:YES]];
         [stack addArrangedSubview:[self popoverRowWithTitle:@"5 小时刷新"
-                                                      value:ResetDisplay(StringOrNil(primary[@"resetsAt"]))
+                                                      value:ClockDisplay(StringOrNil(primary[@"resetsAt"]))
                                                  emphasized:NO]];
         double secondaryRemaining = RemainingPercentValue(secondary[@"usedPercent"]);
         [stack addArrangedSubview:[self popoverRowWithTitle:@"1 周剩余"
@@ -1257,7 +1275,7 @@ static NSString *BucketCompactValue(NSDictionary *bucket) {
                                             valueColor:UsageColorForRemaining(primaryRemaining)
                                             emphasized:YES]];
     [stack addArrangedSubview:[self windowRowWithTitle:@"5 小时刷新"
-                                                 value:ResetDisplay(StringOrNil(primary[@"resetsAt"]))
+                                                 value:ClockDisplay(StringOrNil(primary[@"resetsAt"]))
                                             emphasized:NO]];
     [stack addArrangedSubview:[self windowRowWithTitle:@"1 周剩余"
                                                  value:RemainingPercentText(secondary[@"usedPercent"])
@@ -1308,7 +1326,7 @@ static void PrintSummary(NSDictionary *summary) {
     NSDictionary *primary = PrimaryLimit(summary);
     NSDictionary *secondary = SecondaryLimit(summary);
     printf("Updated: %s\n", [StringOrNil(summary[@"updatedAt"]) ?: @"--" UTF8String]);
-    printf("5h left: %s used %s reset %s\n", [RemainingPercentText(primary[@"usedPercent"]) UTF8String], [PercentText(primary[@"usedPercent"]) UTF8String], [ResetDisplay(StringOrNil(primary[@"resetsAt"])) UTF8String]);
+    printf("5h left: %s used %s reset %s\n", [RemainingPercentText(primary[@"usedPercent"]) UTF8String], [PercentText(primary[@"usedPercent"]) UTF8String], [ClockDisplay(StringOrNil(primary[@"resetsAt"])) UTF8String]);
     printf("7d left: %s used %s reset %s\n", [RemainingPercentText(secondary[@"usedPercent"]) UTF8String], [PercentText(secondary[@"usedPercent"]) UTF8String], [ResetDisplay(StringOrNil(secondary[@"resetsAt"])) UTF8String]);
     printf("%s\n", [BucketLine(@"Today", UsageBucketDict(summary, @"today")) UTF8String]);
     printf("%s\n", [BucketLine(@"All time", UsageBucketDict(summary, @"allTime")) UTF8String]);

@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.1.3 - 2026-06-15
+
+Display polish.
+
+- Show 5-hour reset as clock time only, even when it lands on the next day.
+- Keep 7-day reset dates visible.
+
 ## v0.1.2 - 2026-06-15
 
 Bugfix release.
