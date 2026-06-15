@@ -27,7 +27,7 @@ final class UsageViewModel: ObservableObject {
 
     var menuBarTitle: String {
         guard let summary else { return "Codex --" }
-        return "Codex \(UsageFormatting.remainingPercentText(summary.limits.primary?.usedPercent)) left"
+        return "Codex \(UsageFormatting.remainingPercentText(summary.limits.primary?.usedPercent)) left · reset \(UsageFormatting.resetText(summary.limits.primary?.resetsAt))"
     }
 
     init() {

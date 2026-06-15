@@ -179,6 +179,53 @@ static NSString *RemainingPercentText(id usedValue) {
     return [NSString stringWithFormat:@"%.0f%%", remaining];
 }
 
+static double RemainingPercentValue(id usedValue) {
+    NSNumber *number = NumberOrNil(usedValue);
+    if (!number) {
+        return 0;
+    }
+    double remaining = 100.0 - number.doubleValue;
+    if (remaining < 0) {
+        return 0;
+    }
+    if (remaining > 100) {
+        return 100;
+    }
+    return remaining;
+}
+
+static NSColor *UsageColorForRemaining(double remaining) {
+    if (remaining <= 10) {
+        return NSColor.systemRedColor;
+    }
+    if (remaining <= 20) {
+        return NSColor.systemOrangeColor;
+    }
+    if (remaining <= 50) {
+        return [NSColor colorWithCalibratedRed:0.95 green:0.68 blue:0.05 alpha:1.0];
+    }
+    if (remaining <= 90) {
+        return [NSColor colorWithCalibratedRed:0.10 green:0.74 blue:0.30 alpha:1.0];
+    }
+    return [NSColor colorWithCalibratedRed:0.10 green:0.55 blue:0.95 alpha:1.0];
+}
+
+static NSColor *StatusColorForRemaining(double remaining) {
+    if (remaining <= 10) {
+        return [NSColor colorWithCalibratedRed:1.00 green:0.32 blue:0.28 alpha:1.0];
+    }
+    if (remaining <= 20) {
+        return [NSColor colorWithCalibratedRed:1.00 green:0.58 blue:0.18 alpha:1.0];
+    }
+    if (remaining <= 50) {
+        return [NSColor colorWithCalibratedRed:1.00 green:0.86 blue:0.18 alpha:1.0];
+    }
+    if (remaining <= 90) {
+        return [NSColor colorWithCalibratedRed:0.55 green:1.00 blue:0.62 alpha:1.0];
+    }
+    return [NSColor colorWithCalibratedRed:0.65 green:0.95 blue:1.00 alpha:1.0];
+}
+
 static NSString *YiTokens(long long tokens, NSInteger digits) {
     double value = (double)tokens / 100000000.0;
     return [NSString stringWithFormat:@"%.*f 亿", (int)digits, value];
@@ -510,21 +557,131 @@ static NSDictionary *SecondaryLimit(NSDictionary *summary) {
     return secondary;
 }
 
-static NSColor *ColorForPercent(NSNumber *percent) {
-    if (!percent) {
-        return NSColor.secondaryLabelColor;
+static void SetStatusTitle(NSStatusItem *statusItem, NSString *title) {
+    if (!statusItem.button) {
+        return;
     }
-    double value = percent.doubleValue;
-    if (value < 50) {
-        return NSColor.systemGreenColor;
+
+    statusItem.button.attributedTitle = [[NSAttributedString alloc] initWithString:@""];
+    statusItem.button.title = title;
+    statusItem.button.contentTintColor = nil;
+}
+
+static void DrawCodexMark(NSRect rect, NSColor *color) {
+    NSColor *drawColor = color ?: NSColor.whiteColor;
+    NSBezierPath *ring = [NSBezierPath bezierPathWithOvalInRect:NSInsetRect(rect, 1.5, 1.5)];
+    ring.lineWidth = 1.4;
+    [drawColor setStroke];
+    [ring stroke];
+
+    NSString *letter = @"C";
+    NSMutableParagraphStyle *paragraph = [[NSMutableParagraphStyle alloc] init];
+    paragraph.alignment = NSTextAlignmentCenter;
+    NSDictionary *attributes = @{
+        NSFontAttributeName: [NSFont systemFontOfSize:rect.size.height * 0.62 weight:NSFontWeightBlack],
+        NSForegroundColorAttributeName: drawColor,
+        NSParagraphStyleAttributeName: paragraph
+    };
+    NSSize textSize = [letter sizeWithAttributes:attributes];
+    NSRect textRect = NSMakeRect(NSMinX(rect),
+                                 NSMidY(rect) - textSize.height / 2.0 - 0.3,
+                                 rect.size.width,
+                                 textSize.height);
+    [letter drawInRect:textRect withAttributes:attributes];
+}
+
+static NSImage *CodexBadgeImage(CGFloat size) {
+    NSImage *image = [[NSImage alloc] initWithSize:NSMakeSize(size, size)];
+    [image lockFocus];
+
+    NSRect rect = NSMakeRect(0, 0, size, size);
+    NSBezierPath *background = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(rect, 1, 1)
+                                                               xRadius:size * 0.22
+                                                               yRadius:size * 0.22];
+    [[NSColor colorWithCalibratedRed:0.07 green:0.09 blue:0.13 alpha:1.0] setFill];
+    [background fill];
+
+    NSRect gaugeRect = NSInsetRect(rect, size * 0.18, size * 0.20);
+    NSPoint center = NSMakePoint(NSMidX(gaugeRect), NSMinY(gaugeRect) + gaugeRect.size.height * 0.38);
+    CGFloat radius = gaugeRect.size.width * 0.42;
+
+    NSBezierPath *track = [[NSBezierPath alloc] init];
+    [track appendBezierPathWithArcWithCenter:center radius:radius startAngle:205 endAngle:-25 clockwise:YES];
+    track.lineWidth = MAX(2, size * 0.07);
+    track.lineCapStyle = NSLineCapStyleRound;
+    [[NSColor colorWithCalibratedWhite:1 alpha:0.28] setStroke];
+    [track stroke];
+
+    NSBezierPath *gauge = [[NSBezierPath alloc] init];
+    [gauge appendBezierPathWithArcWithCenter:center radius:radius startAngle:205 endAngle:35 clockwise:YES];
+    gauge.lineWidth = track.lineWidth;
+    gauge.lineCapStyle = NSLineCapStyleRound;
+    [[NSColor colorWithCalibratedRed:0.18 green:0.86 blue:0.50 alpha:1.0] setStroke];
+    [gauge stroke];
+
+    NSDictionary *attributes = @{
+        NSFontAttributeName: [NSFont systemFontOfSize:size * 0.32 weight:NSFontWeightBlack],
+        NSForegroundColorAttributeName: NSColor.whiteColor
+    };
+    NSString *letter = @"C";
+    NSSize textSize = [letter sizeWithAttributes:attributes];
+    [letter drawAtPoint:NSMakePoint((size - textSize.width) / 2.0,
+                                    size * 0.58)
+         withAttributes:attributes];
+
+    [image unlockFocus];
+    image.template = NO;
+    return image;
+}
+
+static NSImage *StatusDisplayImage(double remaining, BOOL hasData) {
+    NSSize size = NSMakeSize(49, 16);
+    NSImage *image = [[NSImage alloc] initWithSize:size];
+    [image lockFocus];
+
+    DrawCodexMark(NSMakeRect(0.5, 0.5, 15.0, 15.0), [NSColor colorWithCalibratedWhite:1.0 alpha:0.88]);
+
+    NSRect bodyRect = NSMakeRect(20.0, 3.0, 24.0, 10.0);
+    NSRect capRect = NSMakeRect(44.5, 6.0, 3.0, 4.0);
+    NSBezierPath *bodyPath = [NSBezierPath bezierPathWithRoundedRect:bodyRect xRadius:3.2 yRadius:3.2];
+    NSBezierPath *capPath = [NSBezierPath bezierPathWithRoundedRect:capRect xRadius:1.4 yRadius:1.4];
+
+    [[NSColor colorWithCalibratedWhite:1.0 alpha:0.30] setFill];
+    [bodyPath fill];
+    [capPath fill];
+
+    if (hasData) {
+        double clamped = MIN(MAX(remaining, 0), 100);
+        CGFloat fillWidth = MAX(1.8, (bodyRect.size.width - 4.0) * clamped / 100.0);
+        NSRect fillRect = NSMakeRect(NSMinX(bodyRect) + 2.0,
+                                     NSMinY(bodyRect) + 2.0,
+                                     fillWidth,
+                                     bodyRect.size.height - 4.0);
+        [UsageColorForRemaining(clamped) setFill];
+        [[NSBezierPath bezierPathWithRoundedRect:fillRect xRadius:2.0 yRadius:2.0] fill];
     }
-    if (value < 80) {
-        return NSColor.systemYellowColor;
+
+    [[NSColor colorWithCalibratedWhite:1.0 alpha:0.72] setStroke];
+    bodyPath.lineWidth = 1.0;
+    [bodyPath stroke];
+
+    [image unlockFocus];
+    image.template = NO;
+    return image;
+}
+
+static void SetStatusDisplay(NSStatusItem *statusItem, NSString *title, double remaining, BOOL hasData) {
+    if (!statusItem.button) {
+        return;
     }
-    if (value < 95) {
-        return NSColor.systemOrangeColor;
-    }
-    return NSColor.systemRedColor;
+
+    statusItem.button.attributedTitle = [[NSAttributedString alloc] initWithString:@""];
+    statusItem.button.title = title ?: @"--";
+    statusItem.button.image = StatusDisplayImage(remaining, hasData);
+    statusItem.button.imagePosition = NSImageLeft;
+    statusItem.button.imageScaling = NSImageScaleProportionallyDown;
+    statusItem.button.contentTintColor = nil;
+    statusItem.button.toolTip = @"Codex 使用情况";
 }
 
 static NSString *BucketLine(NSString *title, NSDictionary *bucket) {
@@ -533,14 +690,55 @@ static NSString *BucketLine(NSString *title, NSDictionary *bucket) {
     return [NSString stringWithFormat:@"%@: %@ total / %@ non-cache", title, YiTokens(total, 2), YiTokens(nonCached, 3)];
 }
 
+static NSString *BucketCompactValue(NSDictionary *bucket) {
+    long long total = LongLongValue(bucket[@"totalTokens"]);
+    return YiTokens(total, 2);
+}
+
+@interface CodexUsageMeterView : NSView
+@property(nonatomic, assign) double remainingPercent;
+@end
+
+@implementation CodexUsageMeterView
+
+- (void)drawRect:(NSRect)dirtyRect {
+    [super drawRect:dirtyRect];
+
+    CGFloat inset = 4;
+    CGFloat trackHeight = 12;
+    NSRect bounds = self.bounds;
+    NSRect trackRect = NSMakeRect(inset, floor((bounds.size.height - trackHeight) / 2.0), MAX(1, bounds.size.width - inset * 2), trackHeight);
+    CGFloat radius = trackHeight / 2.0;
+    NSBezierPath *clipPath = [NSBezierPath bezierPathWithRoundedRect:trackRect xRadius:radius yRadius:radius];
+
+    [[NSColor colorWithCalibratedWhite:0.84 alpha:1.0] setFill];
+    [clipPath fill];
+
+    [NSGraphicsContext saveGraphicsState];
+    [clipPath addClip];
+
+    double remaining = MIN(MAX(self.remainingPercent, 0), 100);
+    CGFloat width = trackRect.size.width * remaining / 100.0;
+    if (width > 0) {
+        [UsageColorForRemaining(remaining) setFill];
+        NSRectFill(NSMakeRect(NSMinX(trackRect), NSMinY(trackRect), width, trackRect.size.height));
+    }
+
+    [NSGraphicsContext restoreGraphicsState];
+}
+
+@end
+
 @interface CodexUsageAppDelegate : NSObject <NSApplicationDelegate>
 @property(nonatomic, strong) NSStatusItem *statusItem;
+@property(nonatomic, strong) NSPopover *popover;
 @property(nonatomic, strong) NSWindow *window;
 @property(nonatomic, strong) NSTextField *windowTitleLabel;
 @property(nonatomic, strong) NSTextField *windowLimitLabel;
 @property(nonatomic, strong) NSTextField *windowUsageLabel;
 @property(nonatomic, strong) NSTextField *windowUpdatedLabel;
 @property(nonatomic, strong) NSDictionary *summary;
+@property(nonatomic, copy) NSString *lastErrorMessage;
 @property(nonatomic, strong) NSDate *launchDate;
 @property(nonatomic, assign) BOOL refreshing;
 @property(nonatomic, assign) BOOL showWindowOnLaunch;
@@ -555,9 +753,10 @@ static NSString *BucketLine(NSString *title, NSDictionary *bucket) {
         if ([self.statusItem respondsToSelector:@selector(setAutosaveName:)]) {
             self.statusItem.autosaveName = @"com.gukai.CodexUsage.status";
         }
-        self.statusItem.button.title = @"Codex --";
-        self.statusItem.button.image = [NSImage imageWithSystemSymbolName:@"speedometer" accessibilityDescription:@"Codex Usage"];
-        self.statusItem.button.imagePosition = NSImageLeft;
+        SetStatusDisplay(self.statusItem, @"--", 0, NO);
+        self.statusItem.button.target = self;
+        self.statusItem.button.action = @selector(togglePopover:);
+        [self.statusItem.button sendActionOn:(NSEventMaskLeftMouseUp | NSEventMaskRightMouseUp)];
     }
     self.summary = LoadSummary();
     [self rebuildMenu];
@@ -590,7 +789,6 @@ static NSString *BucketLine(NSString *title, NSDictionary *bucket) {
     }
 
     self.refreshing = YES;
-    self.statusItem.button.title = @"Codex ...";
 
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         NSError *error = nil;
@@ -599,14 +797,9 @@ static NSString *BucketLine(NSString *title, NSDictionary *bucket) {
             self.refreshing = NO;
             if (summary) {
                 self.summary = summary;
+                self.lastErrorMessage = nil;
             } else if (error) {
-                if (self.statusItem) {
-                    NSMenu *menu = self.statusItem.menu ?: [[NSMenu alloc] init];
-                    [menu addItem:[NSMenuItem separatorItem]];
-                    NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:error.localizedDescription action:nil keyEquivalent:@""];
-                    [menu addItem:item];
-                    self.statusItem.menu = menu;
-                }
+                self.lastErrorMessage = error.localizedDescription;
             }
             [self rebuildMenu];
             [self updateWindowContent];
@@ -620,58 +813,241 @@ static NSString *BucketLine(NSString *title, NSDictionary *bucket) {
     }
 
     NSDictionary *primary = PrimaryLimit(self.summary);
-    NSDictionary *secondary = SecondaryLimit(self.summary);
     NSNumber *primaryPercent = NumberOrNil(primary[@"usedPercent"]);
-    self.statusItem.button.title = [NSString stringWithFormat:@"Codex %@ left", RemainingPercentText(primaryPercent)];
-    self.statusItem.button.contentTintColor = ColorForPercent(primaryPercent);
-
-    NSMenu *menu = [[NSMenu alloc] initWithTitle:@"Codex Usage"];
-    [menu addItem:[[NSMenuItem alloc] initWithTitle:@"Codex Usage" action:nil keyEquivalent:@""]];
-    [menu addItem:[NSMenuItem separatorItem]];
-
-    if (self.summary) {
-        NSString *five = [NSString stringWithFormat:@"5h left: %@ (used %@), reset %@",
-                          RemainingPercentText(primary[@"usedPercent"]),
-                          PercentText(primary[@"usedPercent"]),
-                          ResetDisplay(StringOrNil(primary[@"resetsAt"]))];
-        NSString *seven = [NSString stringWithFormat:@"7d left: %@ (used %@), reset %@",
-                           RemainingPercentText(secondary[@"usedPercent"]),
-                           PercentText(secondary[@"usedPercent"]),
-                           ResetDisplay(StringOrNil(secondary[@"resetsAt"]))];
-        [menu addItem:[[NSMenuItem alloc] initWithTitle:five action:nil keyEquivalent:@""]];
-        [menu addItem:[[NSMenuItem alloc] initWithTitle:seven action:nil keyEquivalent:@""]];
-        [menu addItem:[NSMenuItem separatorItem]];
-        [menu addItem:[[NSMenuItem alloc] initWithTitle:BucketLine(@"Last 5h", UsageBucketDict(self.summary, @"last5h")) action:nil keyEquivalent:@""]];
-        [menu addItem:[[NSMenuItem alloc] initWithTitle:BucketLine(@"Today", UsageBucketDict(self.summary, @"today")) action:nil keyEquivalent:@""]];
-        [menu addItem:[[NSMenuItem alloc] initWithTitle:BucketLine(@"Last 7d", UsageBucketDict(self.summary, @"last7d")) action:nil keyEquivalent:@""]];
-        [menu addItem:[[NSMenuItem alloc] initWithTitle:BucketLine(@"All time", UsageBucketDict(self.summary, @"allTime")) action:nil keyEquivalent:@""]];
-        [menu addItem:[NSMenuItem separatorItem]];
-
-        NSString *updated = [NSString stringWithFormat:@"Updated: %@", StringOrNil(self.summary[@"updatedAt"]) ?: @"--"];
-        [menu addItem:[[NSMenuItem alloc] initWithTitle:updated action:nil keyEquivalent:@""]];
-        [menu addItem:[[NSMenuItem alloc] initWithTitle:@"Non-cache = total - cached input; not official billing." action:nil keyEquivalent:@""]];
+    NSString *remainingText = RemainingPercentText(primaryPercent);
+    NSString *reset = ResetDisplay(StringOrNil(primary[@"resetsAt"]));
+    NSString *statusTitle = [NSString stringWithFormat:@"%@ %@", remainingText, reset];
+    if (primaryPercent) {
+        double remaining = RemainingPercentValue(primaryPercent);
+        SetStatusDisplay(self.statusItem, statusTitle, remaining, YES);
     } else {
-        [menu addItem:[[NSMenuItem alloc] initWithTitle:@"No local usage summary yet." action:nil keyEquivalent:@""]];
+        SetStatusDisplay(self.statusItem, statusTitle, 0, NO);
+    }
+    self.statusItem.menu = nil;
+    if (self.popover.shown) {
+        [self updatePopoverContent];
+    }
+}
+
+- (void)togglePopover:(id)sender {
+    if (self.popover.shown) {
+        [self.popover performClose:sender];
+        return;
     }
 
-    [menu addItem:[NSMenuItem separatorItem]];
-    NSMenuItem *show = [[NSMenuItem alloc] initWithTitle:@"Show Window" action:@selector(showWindow:) keyEquivalent:@"o"];
-    show.target = self;
-    [menu addItem:show];
+    [self showPopover:sender];
+}
 
-    NSMenuItem *refresh = [[NSMenuItem alloc] initWithTitle:self.refreshing ? @"Refreshing..." : @"Refresh Now"
-                                                     action:@selector(refresh:)
-                                              keyEquivalent:@"r"];
-    refresh.target = self;
-    refresh.enabled = !self.refreshing;
-    [menu addItem:refresh];
+- (void)showPopover:(id)sender {
+    if (!self.statusItem.button) {
+        return;
+    }
 
-    [menu addItem:[NSMenuItem separatorItem]];
-    NSMenuItem *quit = [[NSMenuItem alloc] initWithTitle:@"Quit" action:@selector(quit:) keyEquivalent:@"q"];
-    quit.target = self;
-    [menu addItem:quit];
+    if (!self.popover) {
+        self.popover = [[NSPopover alloc] init];
+        self.popover.behavior = NSPopoverBehaviorTransient;
+        self.popover.animates = YES;
+    }
+    [self updatePopoverContent];
+    [self.popover showRelativeToRect:self.statusItem.button.bounds
+                               ofView:self.statusItem.button
+                        preferredEdge:NSRectEdgeMinY];
+}
 
-    self.statusItem.menu = menu;
+- (void)updatePopoverContent {
+    if (!self.popover) {
+        return;
+    }
+
+    self.popover.contentViewController = [self popoverViewController];
+}
+
+- (NSTextField *)popoverLabelWithString:(NSString *)string font:(NSFont *)font color:(NSColor *)color {
+    NSTextField *label = [NSTextField labelWithString:string ?: @""];
+    label.font = font;
+    label.textColor = color;
+    label.lineBreakMode = NSLineBreakByTruncatingTail;
+    label.maximumNumberOfLines = 1;
+    label.translatesAutoresizingMaskIntoConstraints = NO;
+    return label;
+}
+
+- (NSView *)popoverRowWithTitle:(NSString *)title value:(NSString *)value valueColor:(NSColor *)valueColor emphasized:(BOOL)emphasized {
+    NSView *row = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 294, 22)];
+    row.translatesAutoresizingMaskIntoConstraints = NO;
+
+    NSTextField *titleLabel = [self popoverLabelWithString:title
+                                                      font:[NSFont systemFontOfSize:12.5 weight:emphasized ? NSFontWeightSemibold : NSFontWeightRegular]
+                                                     color:NSColor.secondaryLabelColor];
+    NSTextField *valueLabel = [self popoverLabelWithString:value
+                                                      font:[NSFont monospacedDigitSystemFontOfSize:12.5 weight:emphasized ? NSFontWeightSemibold : NSFontWeightRegular]
+                                                     color:valueColor ?: NSColor.labelColor];
+    valueLabel.alignment = NSTextAlignmentRight;
+    valueLabel.lineBreakMode = NSLineBreakByTruncatingMiddle;
+
+    [row addSubview:titleLabel];
+    [row addSubview:valueLabel];
+    [NSLayoutConstraint activateConstraints:@[
+        [row.heightAnchor constraintGreaterThanOrEqualToConstant:22],
+        [titleLabel.leadingAnchor constraintEqualToAnchor:row.leadingAnchor],
+        [titleLabel.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+        [valueLabel.leadingAnchor constraintGreaterThanOrEqualToAnchor:titleLabel.trailingAnchor constant:12],
+        [valueLabel.trailingAnchor constraintEqualToAnchor:row.trailingAnchor],
+        [valueLabel.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+        [valueLabel.widthAnchor constraintGreaterThanOrEqualToConstant:96]
+    ]];
+
+    return row;
+}
+
+- (NSView *)popoverRowWithTitle:(NSString *)title value:(NSString *)value emphasized:(BOOL)emphasized {
+    return [self popoverRowWithTitle:title value:value valueColor:NSColor.labelColor emphasized:emphasized];
+}
+
+- (NSView *)popoverSeparator {
+    NSBox *separator = [[NSBox alloc] initWithFrame:NSMakeRect(0, 0, 340, 1)];
+    separator.boxType = NSBoxSeparator;
+    separator.translatesAutoresizingMaskIntoConstraints = NO;
+    [separator.heightAnchor constraintEqualToConstant:1].active = YES;
+    return separator;
+}
+
+- (NSButton *)popoverIconButtonWithSymbol:(NSString *)symbol tooltip:(NSString *)tooltip action:(SEL)action {
+    NSImage *image = [NSImage imageWithSystemSymbolName:symbol accessibilityDescription:tooltip];
+    NSButton *button = [NSButton buttonWithImage:image target:self action:action];
+    button.translatesAutoresizingMaskIntoConstraints = NO;
+    button.bordered = NO;
+    button.toolTip = tooltip;
+    button.contentTintColor = NSColor.secondaryLabelColor;
+    [button.widthAnchor constraintEqualToConstant:24].active = YES;
+    [button.heightAnchor constraintEqualToConstant:24].active = YES;
+    return button;
+}
+
+- (NSView *)popoverButtonRow {
+    NSStackView *row = [[NSStackView alloc] init];
+    row.translatesAutoresizingMaskIntoConstraints = NO;
+    row.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    row.alignment = NSLayoutAttributeCenterY;
+    row.distribution = NSStackViewDistributionFill;
+    row.spacing = 8;
+
+    NSButton *refreshButton = [NSButton buttonWithTitle:@"刷新"
+                                                 target:self
+                                                 action:@selector(refresh:)];
+    refreshButton.translatesAutoresizingMaskIntoConstraints = NO;
+    refreshButton.enabled = !self.refreshing;
+    refreshButton.bezelStyle = NSBezelStyleRounded;
+    [refreshButton.widthAnchor constraintEqualToConstant:112].active = YES;
+
+    NSView *spacer = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 1, 1)];
+    spacer.translatesAutoresizingMaskIntoConstraints = NO;
+    [spacer setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+
+    [row addArrangedSubview:spacer];
+    [row addArrangedSubview:refreshButton];
+    [row addArrangedSubview:[self popoverIconButtonWithSymbol:@"macwindow" tooltip:@"显示窗口" action:@selector(showWindow:)]];
+    [row addArrangedSubview:[self popoverIconButtonWithSymbol:@"power" tooltip:@"退出" action:@selector(quit:)]];
+    return row;
+}
+
+- (NSViewController *)popoverViewController {
+    NSViewController *controller = [[NSViewController alloc] init];
+    NSView *content = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 326, 368)];
+    content.translatesAutoresizingMaskIntoConstraints = NO;
+    content.wantsLayer = YES;
+    content.layer.backgroundColor = [NSColor colorWithCalibratedRed:0.95 green:0.98 blue:1.00 alpha:1.0].CGColor;
+    content.layer.cornerRadius = 14;
+
+    NSStackView *stack = [[NSStackView alloc] init];
+    stack.translatesAutoresizingMaskIntoConstraints = NO;
+    stack.orientation = NSUserInterfaceLayoutOrientationVertical;
+    stack.alignment = NSLayoutAttributeWidth;
+    stack.spacing = 5;
+    stack.edgeInsets = NSEdgeInsetsMake(13, 16, 13, 16);
+    [content addSubview:stack];
+
+    [NSLayoutConstraint activateConstraints:@[
+        [content.widthAnchor constraintEqualToConstant:326],
+        [stack.topAnchor constraintEqualToAnchor:content.topAnchor],
+        [stack.leadingAnchor constraintEqualToAnchor:content.leadingAnchor],
+        [stack.trailingAnchor constraintEqualToAnchor:content.trailingAnchor],
+        [stack.bottomAnchor constraintEqualToAnchor:content.bottomAnchor]
+    ]];
+
+    NSTextField *titleLabel = [self popoverLabelWithString:@"Codex 使用情况"
+                                                      font:[NSFont systemFontOfSize:14 weight:NSFontWeightSemibold]
+                                                     color:NSColor.secondaryLabelColor];
+    titleLabel.alignment = NSTextAlignmentCenter;
+    [stack addArrangedSubview:titleLabel];
+
+    if (self.summary) {
+        NSDictionary *primary = PrimaryLimit(self.summary);
+        NSDictionary *secondary = SecondaryLimit(self.summary);
+        double remaining = RemainingPercentValue(primary[@"usedPercent"]);
+
+        CodexUsageMeterView *meter = [[CodexUsageMeterView alloc] initWithFrame:NSMakeRect(0, 0, 294, 34)];
+        meter.translatesAutoresizingMaskIntoConstraints = NO;
+        meter.remainingPercent = remaining;
+        meter.wantsLayer = YES;
+        [meter.heightAnchor constraintEqualToConstant:30].active = YES;
+        [stack addArrangedSubview:meter];
+
+        [stack addArrangedSubview:[self popoverRowWithTitle:@"5 小时剩余"
+                                                      value:RemainingPercentText(primary[@"usedPercent"])
+                                                 valueColor:UsageColorForRemaining(remaining)
+                                                 emphasized:YES]];
+        [stack addArrangedSubview:[self popoverRowWithTitle:@"5 小时刷新"
+                                                      value:ResetDisplay(StringOrNil(primary[@"resetsAt"]))
+                                                 emphasized:NO]];
+        double secondaryRemaining = RemainingPercentValue(secondary[@"usedPercent"]);
+        [stack addArrangedSubview:[self popoverRowWithTitle:@"1 周剩余"
+                                                      value:RemainingPercentText(secondary[@"usedPercent"])
+                                                 valueColor:UsageColorForRemaining(secondaryRemaining)
+                                                 emphasized:YES]];
+        [stack addArrangedSubview:[self popoverRowWithTitle:@"1 周刷新"
+                                                      value:ResetDisplay(StringOrNil(secondary[@"resetsAt"]))
+                                                 emphasized:NO]];
+        [stack addArrangedSubview:[self popoverSeparator]];
+        [stack addArrangedSubview:[self popoverRowWithTitle:@"最近 5 小时"
+                                                      value:BucketCompactValue(UsageBucketDict(self.summary, @"last5h"))
+                                                 emphasized:NO]];
+        [stack addArrangedSubview:[self popoverRowWithTitle:@"今日"
+                                                      value:BucketCompactValue(UsageBucketDict(self.summary, @"today"))
+                                                 emphasized:NO]];
+        [stack addArrangedSubview:[self popoverRowWithTitle:@"最近 7 天"
+                                                      value:BucketCompactValue(UsageBucketDict(self.summary, @"last7d"))
+                                                 emphasized:NO]];
+        [stack addArrangedSubview:[self popoverRowWithTitle:@"总计"
+                                                      value:BucketCompactValue(UsageBucketDict(self.summary, @"allTime"))
+                                                 emphasized:NO]];
+        [stack addArrangedSubview:[self popoverSeparator]];
+        [stack addArrangedSubview:[self popoverRowWithTitle:@"更新"
+                                                      value:ResetDisplay(StringOrNil(self.summary[@"updatedAt"]))
+                                                 emphasized:NO]];
+    } else {
+        NSTextField *emptyLabel = [self popoverLabelWithString:@"暂无本地使用摘要"
+                                                          font:[NSFont systemFontOfSize:13 weight:NSFontWeightRegular]
+                                                         color:NSColor.secondaryLabelColor];
+        emptyLabel.maximumNumberOfLines = 0;
+        emptyLabel.lineBreakMode = NSLineBreakByWordWrapping;
+        [emptyLabel.heightAnchor constraintGreaterThanOrEqualToConstant:72].active = YES;
+        [stack addArrangedSubview:emptyLabel];
+    }
+
+    if (self.lastErrorMessage.length > 0) {
+        NSTextField *errorLabel = [self popoverLabelWithString:self.lastErrorMessage
+                                                          font:[NSFont systemFontOfSize:12 weight:NSFontWeightRegular]
+                                                         color:NSColor.systemRedColor];
+        errorLabel.maximumNumberOfLines = 2;
+        errorLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+        [stack addArrangedSubview:errorLabel];
+    }
+
+    [stack addArrangedSubview:[self popoverButtonRow]];
+
+    controller.view = content;
+    return controller;
 }
 
 - (BOOL)applicationShouldHandleReopen:(NSApplication *)sender hasVisibleWindows:(BOOL)flag {
@@ -684,6 +1060,7 @@ static NSString *BucketLine(NSString *title, NSDictionary *bucket) {
 }
 
 - (void)showWindow:(id)sender {
+    [self.popover performClose:sender];
     [self ensureWindow];
     [self updateWindowContent];
     [self.window makeKeyAndOrderFront:nil];
@@ -700,12 +1077,61 @@ static NSString *BucketLine(NSString *title, NSDictionary *bucket) {
     return label;
 }
 
+- (NSTextField *)windowLabelWithString:(NSString *)string font:(NSFont *)font color:(NSColor *)color {
+    NSTextField *label = [NSTextField labelWithString:string ?: @""];
+    label.font = font;
+    label.textColor = color;
+    label.lineBreakMode = NSLineBreakByTruncatingTail;
+    label.maximumNumberOfLines = 1;
+    label.translatesAutoresizingMaskIntoConstraints = NO;
+    return label;
+}
+
+- (NSView *)windowSeparator {
+    NSBox *separator = [[NSBox alloc] initWithFrame:NSMakeRect(0, 0, 460, 1)];
+    separator.boxType = NSBoxSeparator;
+    separator.translatesAutoresizingMaskIntoConstraints = NO;
+    [separator.heightAnchor constraintEqualToConstant:1].active = YES;
+    return separator;
+}
+
+- (NSView *)windowRowWithTitle:(NSString *)title value:(NSString *)value valueColor:(NSColor *)valueColor emphasized:(BOOL)emphasized {
+    NSView *row = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 460, 25)];
+    row.translatesAutoresizingMaskIntoConstraints = NO;
+
+    NSTextField *titleLabel = [self windowLabelWithString:title
+                                                     font:[NSFont systemFontOfSize:14 weight:emphasized ? NSFontWeightSemibold : NSFontWeightRegular]
+                                                    color:NSColor.secondaryLabelColor];
+    NSTextField *valueLabel = [self windowLabelWithString:value
+                                                     font:[NSFont monospacedDigitSystemFontOfSize:15 weight:emphasized ? NSFontWeightSemibold : NSFontWeightRegular]
+                                                    color:valueColor ?: NSColor.labelColor];
+    valueLabel.alignment = NSTextAlignmentRight;
+
+    [row addSubview:titleLabel];
+    [row addSubview:valueLabel];
+    [NSLayoutConstraint activateConstraints:@[
+        [row.heightAnchor constraintEqualToConstant:25],
+        [titleLabel.leadingAnchor constraintEqualToAnchor:row.leadingAnchor],
+        [titleLabel.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+        [valueLabel.leadingAnchor constraintGreaterThanOrEqualToAnchor:titleLabel.trailingAnchor constant:18],
+        [valueLabel.trailingAnchor constraintEqualToAnchor:row.trailingAnchor],
+        [valueLabel.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+        [valueLabel.widthAnchor constraintGreaterThanOrEqualToConstant:130]
+    ]];
+
+    return row;
+}
+
+- (NSView *)windowRowWithTitle:(NSString *)title value:(NSString *)value emphasized:(BOOL)emphasized {
+    return [self windowRowWithTitle:title value:value valueColor:NSColor.labelColor emphasized:emphasized];
+}
+
 - (void)ensureWindow {
     if (self.window) {
         return;
     }
 
-    NSRect frame = NSMakeRect(0, 0, 460, 340);
+    NSRect frame = NSMakeRect(0, 0, 520, 430);
     self.window = [[NSWindow alloc] initWithContentRect:frame
                                              styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable)
                                                backing:NSBackingStoreBuffered
@@ -715,41 +1141,10 @@ static NSString *BucketLine(NSString *title, NSDictionary *bucket) {
     [self.window center];
 
     NSView *content = [[NSView alloc] initWithFrame:frame];
-    content.translatesAutoresizingMaskIntoConstraints = NO;
+    content.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    content.wantsLayer = YES;
+    content.layer.backgroundColor = [NSColor colorWithCalibratedRed:0.95 green:0.98 blue:1.00 alpha:1.0].CGColor;
     self.window.contentView = content;
-
-    self.windowTitleLabel = [self labelWithFont:[NSFont boldSystemFontOfSize:22] color:NSColor.labelColor];
-    self.windowLimitLabel = [self labelWithFont:[NSFont monospacedDigitSystemFontOfSize:18 weight:NSFontWeightSemibold] color:NSColor.labelColor];
-    self.windowUsageLabel = [self labelWithFont:[NSFont systemFontOfSize:13] color:NSColor.secondaryLabelColor];
-    self.windowUpdatedLabel = [self labelWithFont:[NSFont systemFontOfSize:12] color:NSColor.tertiaryLabelColor];
-
-    NSButton *refreshButton = [NSButton buttonWithTitle:@"Refresh" target:self action:@selector(refresh:)];
-    refreshButton.translatesAutoresizingMaskIntoConstraints = NO;
-
-    [content addSubview:self.windowTitleLabel];
-    [content addSubview:self.windowLimitLabel];
-    [content addSubview:self.windowUsageLabel];
-    [content addSubview:self.windowUpdatedLabel];
-    [content addSubview:refreshButton];
-
-    [NSLayoutConstraint activateConstraints:@[
-        [self.windowTitleLabel.topAnchor constraintEqualToAnchor:content.topAnchor constant:24],
-        [self.windowTitleLabel.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:24],
-        [self.windowTitleLabel.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-24],
-        [self.windowLimitLabel.topAnchor constraintEqualToAnchor:self.windowTitleLabel.bottomAnchor constant:18],
-        [self.windowLimitLabel.leadingAnchor constraintEqualToAnchor:self.windowTitleLabel.leadingAnchor],
-        [self.windowLimitLabel.trailingAnchor constraintEqualToAnchor:self.windowTitleLabel.trailingAnchor],
-        [self.windowUsageLabel.topAnchor constraintEqualToAnchor:self.windowLimitLabel.bottomAnchor constant:16],
-        [self.windowUsageLabel.leadingAnchor constraintEqualToAnchor:self.windowTitleLabel.leadingAnchor],
-        [self.windowUsageLabel.trailingAnchor constraintEqualToAnchor:self.windowTitleLabel.trailingAnchor],
-        [self.windowUpdatedLabel.topAnchor constraintEqualToAnchor:self.windowUsageLabel.bottomAnchor constant:14],
-        [self.windowUpdatedLabel.leadingAnchor constraintEqualToAnchor:self.windowTitleLabel.leadingAnchor],
-        [self.windowUpdatedLabel.trailingAnchor constraintEqualToAnchor:self.windowTitleLabel.trailingAnchor],
-        [self.windowUpdatedLabel.bottomAnchor constraintLessThanOrEqualToAnchor:refreshButton.topAnchor constant:-14],
-        [refreshButton.leadingAnchor constraintEqualToAnchor:self.windowTitleLabel.leadingAnchor],
-        [refreshButton.bottomAnchor constraintEqualToAnchor:content.bottomAnchor constant:-22]
-    ]];
-
 }
 
 - (void)updateWindowContent {
@@ -757,11 +1152,72 @@ static NSString *BucketLine(NSString *title, NSDictionary *bucket) {
         return;
     }
 
+    NSView *content = self.window.contentView;
+    for (NSView *subview in content.subviews.copy) {
+        [subview removeFromSuperview];
+    }
+    content.wantsLayer = YES;
+    content.layer.backgroundColor = [NSColor colorWithCalibratedRed:0.95 green:0.98 blue:1.00 alpha:1.0].CGColor;
+
+    NSStackView *stack = [[NSStackView alloc] init];
+    stack.translatesAutoresizingMaskIntoConstraints = NO;
+    stack.orientation = NSUserInterfaceLayoutOrientationVertical;
+    stack.alignment = NSLayoutAttributeWidth;
+    stack.spacing = 6;
+    stack.edgeInsets = NSEdgeInsetsMake(22, 28, 22, 28);
+    [content addSubview:stack];
+
+    [NSLayoutConstraint activateConstraints:@[
+        [stack.topAnchor constraintEqualToAnchor:content.topAnchor],
+        [stack.leadingAnchor constraintEqualToAnchor:content.leadingAnchor],
+        [stack.trailingAnchor constraintEqualToAnchor:content.trailingAnchor],
+        [stack.bottomAnchor constraintEqualToAnchor:content.bottomAnchor]
+    ]];
+
+    NSStackView *header = [[NSStackView alloc] init];
+    header.translatesAutoresizingMaskIntoConstraints = NO;
+    header.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    header.alignment = NSLayoutAttributeCenterY;
+    header.spacing = 12;
+
+    NSImageView *iconView = [[NSImageView alloc] initWithFrame:NSMakeRect(0, 0, 34, 34)];
+    iconView.translatesAutoresizingMaskIntoConstraints = NO;
+    iconView.image = CodexBadgeImage(34);
+    [iconView.widthAnchor constraintEqualToConstant:34].active = YES;
+    [iconView.heightAnchor constraintEqualToConstant:34].active = YES;
+
+    NSTextField *titleLabel = [self windowLabelWithString:@"Codex 使用情况"
+                                                     font:[NSFont systemFontOfSize:22 weight:NSFontWeightBold]
+                                                    color:NSColor.labelColor];
+
+    NSView *spacer = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 1, 1)];
+    spacer.translatesAutoresizingMaskIntoConstraints = NO;
+    [spacer setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+
+    NSString *updatedText = self.summary ? [NSString stringWithFormat:@"更新 %@", ResetDisplay(StringOrNil(self.summary[@"updatedAt"]))] : @"--";
+    NSTextField *updatedLabel = [self windowLabelWithString:updatedText
+                                                       font:[NSFont monospacedDigitSystemFontOfSize:13 weight:NSFontWeightRegular]
+                                                      color:NSColor.tertiaryLabelColor];
+    updatedLabel.alignment = NSTextAlignmentRight;
+
+    [header addArrangedSubview:iconView];
+    [header addArrangedSubview:titleLabel];
+    [header addArrangedSubview:spacer];
+    [header addArrangedSubview:updatedLabel];
+    [stack addArrangedSubview:header];
+
     if (!self.summary) {
-        self.windowTitleLabel.stringValue = @"Codex Usage";
-        self.windowLimitLabel.stringValue = @"No local summary yet";
-        self.windowUsageLabel.stringValue = @"Click Refresh after Codex has written token_count events.";
-        self.windowUpdatedLabel.stringValue = SummaryPath();
+        NSTextField *emptyLabel = [self windowLabelWithString:@"暂无本地使用摘要"
+                                                         font:[NSFont systemFontOfSize:15 weight:NSFontWeightRegular]
+                                                        color:NSColor.secondaryLabelColor];
+        [emptyLabel.heightAnchor constraintGreaterThanOrEqualToConstant:72].active = YES;
+        [stack addArrangedSubview:emptyLabel];
+
+        NSButton *refreshButton = [NSButton buttonWithTitle:@"刷新" target:self action:@selector(refresh:)];
+        refreshButton.translatesAutoresizingMaskIntoConstraints = NO;
+        refreshButton.bezelStyle = NSBezelStyleRounded;
+        [refreshButton.widthAnchor constraintEqualToConstant:96].active = YES;
+        [stack addArrangedSubview:refreshButton];
         return;
     }
 
@@ -772,20 +1228,59 @@ static NSString *BucketLine(NSString *title, NSDictionary *bucket) {
     NSDictionary *last7d = UsageBucketDict(self.summary, @"last7d");
     NSDictionary *allTime = UsageBucketDict(self.summary, @"allTime");
 
-    self.windowTitleLabel.stringValue = @"Codex Usage";
-    self.windowLimitLabel.stringValue = [NSString stringWithFormat:@"5h left %@ · used %@ · reset %@\n7d left %@ · used %@ · reset %@",
-                                         RemainingPercentText(primary[@"usedPercent"]),
-                                         PercentText(primary[@"usedPercent"]),
-                                         ResetDisplay(StringOrNil(primary[@"resetsAt"])),
-                                         RemainingPercentText(secondary[@"usedPercent"]),
-                                         PercentText(secondary[@"usedPercent"]),
-                                         ResetDisplay(StringOrNil(secondary[@"resetsAt"]))];
-    self.windowUsageLabel.stringValue = [NSString stringWithFormat:@"%@\n%@\n%@\n%@\n\nNon-cache = total - cached input; not official billing.",
-                                         BucketLine(@"Last 5h", last5h),
-                                         BucketLine(@"Today", today),
-                                         BucketLine(@"Last 7d", last7d),
-                                         BucketLine(@"All time", allTime)];
-    self.windowUpdatedLabel.stringValue = [NSString stringWithFormat:@"Updated: %@\n%@", StringOrNil(self.summary[@"updatedAt"]) ?: @"--", SummaryPath()];
+    double primaryRemaining = RemainingPercentValue(primary[@"usedPercent"]);
+    double secondaryRemaining = RemainingPercentValue(secondary[@"usedPercent"]);
+
+    CodexUsageMeterView *meter = [[CodexUsageMeterView alloc] initWithFrame:NSMakeRect(0, 0, 464, 32)];
+    meter.translatesAutoresizingMaskIntoConstraints = NO;
+    meter.remainingPercent = primaryRemaining;
+    [meter.heightAnchor constraintEqualToConstant:32].active = YES;
+    [stack addArrangedSubview:meter];
+
+    [stack addArrangedSubview:[self windowRowWithTitle:@"5 小时剩余"
+                                                 value:RemainingPercentText(primary[@"usedPercent"])
+                                            valueColor:UsageColorForRemaining(primaryRemaining)
+                                            emphasized:YES]];
+    [stack addArrangedSubview:[self windowRowWithTitle:@"5 小时刷新"
+                                                 value:ResetDisplay(StringOrNil(primary[@"resetsAt"]))
+                                            emphasized:NO]];
+    [stack addArrangedSubview:[self windowRowWithTitle:@"1 周剩余"
+                                                 value:RemainingPercentText(secondary[@"usedPercent"])
+                                            valueColor:UsageColorForRemaining(secondaryRemaining)
+                                            emphasized:YES]];
+    [stack addArrangedSubview:[self windowRowWithTitle:@"1 周刷新"
+                                                 value:ResetDisplay(StringOrNil(secondary[@"resetsAt"]))
+                                            emphasized:NO]];
+    [stack addArrangedSubview:[self windowSeparator]];
+    [stack addArrangedSubview:[self windowRowWithTitle:@"最近 5 小时" value:BucketCompactValue(last5h) emphasized:NO]];
+    [stack addArrangedSubview:[self windowRowWithTitle:@"今日" value:BucketCompactValue(today) emphasized:NO]];
+    [stack addArrangedSubview:[self windowRowWithTitle:@"最近 7 天" value:BucketCompactValue(last7d) emphasized:NO]];
+    [stack addArrangedSubview:[self windowRowWithTitle:@"总计" value:BucketCompactValue(allTime) emphasized:NO]];
+    [stack addArrangedSubview:[self windowSeparator]];
+
+    NSStackView *footer = [[NSStackView alloc] init];
+    footer.translatesAutoresizingMaskIntoConstraints = NO;
+    footer.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    footer.alignment = NSLayoutAttributeCenterY;
+    footer.spacing = 10;
+
+    NSTextField *footerLabel = [self windowLabelWithString:@"本地日志汇总"
+                                                      font:[NSFont systemFontOfSize:12 weight:NSFontWeightRegular]
+                                                     color:NSColor.tertiaryLabelColor];
+    NSView *footerSpacer = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 1, 1)];
+    footerSpacer.translatesAutoresizingMaskIntoConstraints = NO;
+    [footerSpacer setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+
+    NSButton *refreshButton = [NSButton buttonWithTitle:@"刷新" target:self action:@selector(refresh:)];
+    refreshButton.translatesAutoresizingMaskIntoConstraints = NO;
+    refreshButton.enabled = !self.refreshing;
+    refreshButton.bezelStyle = NSBezelStyleRounded;
+    [refreshButton.widthAnchor constraintEqualToConstant:92].active = YES;
+
+    [footer addArrangedSubview:footerLabel];
+    [footer addArrangedSubview:footerSpacer];
+    [footer addArrangedSubview:refreshButton];
+    [stack addArrangedSubview:footer];
 }
 
 - (void)quit:(id)sender {

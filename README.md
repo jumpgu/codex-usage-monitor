@@ -5,17 +5,15 @@
 当前主功能是菜单栏常驻显示，例如：
 
 ```text
-Codex 94% left
+[Codex 标识 + 彩色电量条] 64% 14:02
 ```
 
 点击菜单栏项目后可以查看：
 
-- 5 小时窗口剩余额度、已用比例和 reset 时间
-- 7 天窗口剩余额度、已用比例和 reset 时间
+- 5 小时窗口剩余额度和刷新时间
+- 7 天窗口剩余额度和刷新时间
 - 最近 5 小时、今天、最近 7 天、累计 token 统计
-- non-cache 近似值，计算方式为 `total_tokens - cached_input_tokens`
-
-> non-cache 只是趋势参考，不等同于 OpenAI 官方账单。
+- 紧凑的彩色进度条，颜色随剩余额度变化
 
 ## 数据来源
 
@@ -59,25 +57,21 @@ Codex 94% left
 
 ## 手动刷新
 
-点击菜单栏 `Codex ... left` 项，选择：
+点击菜单栏项目展开面板，然后点击：
 
 ```text
-Refresh Now
+刷新
 ```
 
 ## 打开主窗口
 
-从菜单栏选择：
-
-```text
-Show Window
-```
-
-也可以直接打开：
+从展开面板点击窗口图标，或直接打开：
 
 ```text
 /Applications/Codex Usage.app
 ```
+
+主窗口使用和展开面板一致的 dashboard 设计，适合停靠查看。
 
 ## 卸载
 
@@ -114,3 +108,4 @@ Sources/CodexUsageMenuBar
 - reset 时间来自 Codex 本地 `token_count` 事件里的 rate limit 数据。
 - 如果最近的 5 小时窗口 reset 时间已经过期，工具会按当前本地窗口做兜底修正，避免显示旧窗口时间。
 - 菜单栏显示的是剩余额度，不是已用额度。
+- 小组件代码仍保留在仓库中，但当前发布目标是 macOS 菜单栏版本。
