@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.1.5 - 2026-06-16
+
+Maintenance release.
+
+- Add uninstall and reinstall scripts.
+- Document the local independent Git repository workflow with GitCode and GitHub remotes.
+- Ignore generated app iconset files in the repository.
+
 ## v0.1.4 - 2026-06-16
 
 Usage detail release.
