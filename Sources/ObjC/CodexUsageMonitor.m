@@ -249,6 +249,11 @@ static NSString *YiTokens(long long tokens, NSInteger digits) {
     return [NSString stringWithFormat:@"%.*f 亿", (int)digits, value];
 }
 
+static NSString *YiTokensCompact(long long tokens, NSInteger digits) {
+    double value = (double)tokens / 100000000.0;
+    return [NSString stringWithFormat:@"%.*f亿", (int)digits, value];
+}
+
 static BOOL BytesContainNeedle(const uint8_t *bytes, NSUInteger start, NSUInteger end, const char *needle, NSUInteger needleLength) {
     if (end <= start || end - start < needleLength) {
         return NO;
@@ -724,8 +729,11 @@ static NSString *BucketLine(NSString *title, NSDictionary *bucket) {
 }
 
 static NSString *BucketCompactValue(NSDictionary *bucket) {
-    long long total = LongLongValue(bucket[@"totalTokens"]);
-    return YiTokens(total, 2);
+    long long cached = LongLongValue(bucket[@"cachedInputTokens"]);
+    long long nonCached = LongLongValue(bucket[@"nonCachedApproxTokens"]);
+    return [NSString stringWithFormat:@"命中%@ / 未命中%@",
+            YiTokensCompact(cached, 2),
+            YiTokensCompact(nonCached, 3)];
 }
 
 @interface CodexUsageMeterView : NSView
