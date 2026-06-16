@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.1.4 - 2026-06-16
+
+Usage detail release.
+
+- Show cached and non-cached token usage separately in the popover and main dashboard.
+- Keep the compact row layout while adding cache hit/miss detail.
+
 ## v0.1.3 - 2026-06-15
 
 Display polish.
