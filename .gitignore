@@ -4,5 +4,5 @@
 *.xcuserdata/
 *.xcuserstate
 DerivedData/
-Packaging/AppIcon.iconset/.DS_Store
+Packaging/AppIcon.iconset/
 Sources/.DS_Store

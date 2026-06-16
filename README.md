@@ -76,12 +76,19 @@
 ## 卸载
 
 ```sh
-launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.gukai.CodexUsage.collector.plist" 2>/dev/null || true
-launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.gukai.CodexUsage.menubar.plist" 2>/dev/null || true
-rm -f "$HOME/Library/LaunchAgents/com.gukai.CodexUsage.collector.plist"
-rm -f "$HOME/Library/LaunchAgents/com.gukai.CodexUsage.menubar.plist"
-rm -rf "/Applications/Codex Usage.app"
-rm -rf "$HOME/Library/Application Support/CodexUsage"
+./Scripts/uninstall.sh
+```
+
+保留本地 `usage_summary.json` 等支持数据：
+
+```sh
+./Scripts/uninstall.sh --keep-data
+```
+
+## 重装
+
+```sh
+./Scripts/reinstall.sh
 ```
 
 ## 构建
@@ -102,6 +109,22 @@ Sources/CodexUsageMenuBar
 ```
 
 小组件功能不是当前主发布目标，菜单栏版本可以独立使用。
+
+## 代码仓库
+
+本目录是独立 Git 仓库，配置两个远端：
+
+```text
+origin  https://gitcode.com/jumpgu/codex-usage-monitor.git
+github  https://github.com/jumpgu/codex-usage-monitor.git
+```
+
+常规同步：
+
+```sh
+git push origin main --tags
+git push github main --tags
+```
 
 ## 已知说明
 
