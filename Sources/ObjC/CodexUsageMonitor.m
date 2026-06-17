@@ -595,6 +595,28 @@ static NSDictionary *SecondaryLimit(NSDictionary *summary) {
     return secondary;
 }
 
+static BOOL ShouldDisplaySecondaryInStatus(NSDictionary *primary, NSDictionary *secondary) {
+    NSNumber *primaryUsed = NumberOrNil(primary[@"usedPercent"]);
+    NSNumber *secondaryUsed = NumberOrNil(secondary[@"usedPercent"]);
+    if (!primaryUsed || !secondaryUsed) {
+        return NO;
+    }
+
+    double primaryRemaining = RemainingPercentValue(primaryUsed);
+    double secondaryRemaining = RemainingPercentValue(secondaryUsed);
+    return secondaryRemaining < 10.0 && secondaryRemaining * 7.0 < primaryRemaining;
+}
+
+static NSDictionary *StatusLimit(NSDictionary *summary, BOOL *showsSecondary) {
+    NSDictionary *primary = PrimaryLimit(summary);
+    NSDictionary *secondary = SecondaryLimit(summary);
+    BOOL useSecondary = ShouldDisplaySecondaryInStatus(primary, secondary);
+    if (showsSecondary) {
+        *showsSecondary = useSecondary;
+    }
+    return useSecondary ? secondary : primary;
+}
+
 static void SetStatusTitle(NSStatusItem *statusItem, NSString *title) {
     if (!statusItem.button) {
         return;
@@ -708,7 +730,7 @@ static NSImage *StatusDisplayImage(double remaining, BOOL hasData) {
     return image;
 }
 
-static void SetStatusDisplay(NSStatusItem *statusItem, NSString *title, double remaining, BOOL hasData) {
+static void SetStatusDisplay(NSStatusItem *statusItem, NSString *title, double remaining, BOOL hasData, NSString *toolTip) {
     if (!statusItem.button) {
         return;
     }
@@ -719,7 +741,7 @@ static void SetStatusDisplay(NSStatusItem *statusItem, NSString *title, double r
     statusItem.button.imagePosition = NSImageLeft;
     statusItem.button.imageScaling = NSImageScaleProportionallyDown;
     statusItem.button.contentTintColor = nil;
-    statusItem.button.toolTip = @"Codex 使用情况";
+    statusItem.button.toolTip = toolTip ?: @"Codex 使用情况";
 }
 
 static NSString *BucketLine(NSString *title, NSDictionary *bucket) {
@@ -794,7 +816,7 @@ static NSString *BucketCompactValue(NSDictionary *bucket) {
         if ([self.statusItem respondsToSelector:@selector(setAutosaveName:)]) {
             self.statusItem.autosaveName = @"com.gukai.CodexUsage.status";
         }
-        SetStatusDisplay(self.statusItem, @"--", 0, NO);
+        SetStatusDisplay(self.statusItem, @"--", 0, NO, @"Codex 使用情况");
         self.statusItem.button.target = self;
         self.statusItem.button.action = @selector(togglePopover:);
         [self.statusItem.button sendActionOn:(NSEventMaskLeftMouseUp | NSEventMaskRightMouseUp)];
@@ -853,16 +875,18 @@ static NSString *BucketCompactValue(NSDictionary *bucket) {
         return;
     }
 
-    NSDictionary *primary = PrimaryLimit(self.summary);
-    NSNumber *primaryPercent = NumberOrNil(primary[@"usedPercent"]);
-    NSString *remainingText = RemainingPercentText(primaryPercent);
-    NSString *reset = ClockDisplay(StringOrNil(primary[@"resetsAt"]));
+    BOOL showsSecondary = NO;
+    NSDictionary *limit = StatusLimit(self.summary, &showsSecondary);
+    NSNumber *usedPercent = NumberOrNil(limit[@"usedPercent"]);
+    NSString *remainingText = RemainingPercentText(usedPercent);
+    NSString *reset = showsSecondary ? ResetDisplay(StringOrNil(limit[@"resetsAt"])) : ClockDisplay(StringOrNil(limit[@"resetsAt"]));
     NSString *statusTitle = [NSString stringWithFormat:@"%@ %@", remainingText, reset];
-    if (primaryPercent) {
-        double remaining = RemainingPercentValue(primaryPercent);
-        SetStatusDisplay(self.statusItem, statusTitle, remaining, YES);
+    NSString *toolTip = showsSecondary ? @"Codex 使用情况 · 1 周窗口" : @"Codex 使用情况 · 5 小时窗口";
+    if (usedPercent) {
+        double remaining = RemainingPercentValue(usedPercent);
+        SetStatusDisplay(self.statusItem, statusTitle, remaining, YES, toolTip);
     } else {
-        SetStatusDisplay(self.statusItem, statusTitle, 0, NO);
+        SetStatusDisplay(self.statusItem, statusTitle, 0, NO, @"Codex 使用情况");
     }
     self.statusItem.menu = nil;
     if (self.popover.shown) {

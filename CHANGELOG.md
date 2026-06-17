@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.1.6 - 2026-06-17
+
+Quota priority release.
+
+- Let the menu bar automatically switch to the 7-day quota when the weekly window is the tighter limit.
+- Keep the expanded popover unchanged so both 5-hour and 7-day windows remain visible.
+- Bump the macOS app bundle version to 0.1.6 (7).
+
 ## v0.1.5 - 2026-06-16
 
 Maintenance release.
