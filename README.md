@@ -15,6 +15,12 @@
 - 最近 5 小时、今天、最近 7 天、累计 token 统计，并区分命中缓存和未命中缓存
 - 紧凑的彩色进度条，颜色随剩余额度变化
 
+## 效果图
+
+| 菜单栏展开面板 | 主窗口 |
+| --- | --- |
+| <img src="docs/images/popover.png" alt="Codex Usage 菜单栏展开面板" width="360"> | <img src="docs/images/dashboard.png" alt="Codex Usage 主窗口" width="520"> |
+
 ## 数据来源
 
 工具只读取本机 Codex 日志：
