@@ -17,6 +17,10 @@
 
 ## 效果图
 
+菜单栏常驻状态：
+
+<img src="docs/images/menubar.png" alt="Codex Usage 菜单栏常驻状态" width="254">
+
 | 菜单栏展开面板 | 主窗口 |
 | --- | --- |
 | <img src="docs/images/popover.png" alt="Codex Usage 菜单栏展开面板" width="360"> | <img src="docs/images/dashboard.png" alt="Codex Usage 主窗口" width="520"> |
