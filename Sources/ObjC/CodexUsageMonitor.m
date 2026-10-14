@@ -11,8 +11,10 @@ typedef struct {
 } UsageBucket;
 
 static NSString * const CodexUsageSummaryRelativePath = @"Library/Application Support/CodexUsage/usage_summary.json";
-static NSString * const CodexUsageSessionRelativePath = @".codex/sessions";
-static NSString * const CodexUsageArchivedSessionRelativePath = @".codex/archived_sessions";
+static NSString *CodexRoot(void) {
+    NSString *configured = NSProcessInfo.processInfo.environment[@"CODEX_HOME"];
+    return configured.length ? configured.stringByExpandingTildeInPath : [NSHomeDirectory() stringByAppendingPathComponent:@".codex"];
+}
 
 static NSString *HomePath(void) {
     return NSHomeDirectory();
@@ -27,11 +29,11 @@ static NSString *WidgetContainerSummaryPath(void) {
 }
 
 static NSString *SessionsRoot(void) {
-    return [HomePath() stringByAppendingPathComponent:CodexUsageSessionRelativePath];
+    return [CodexRoot() stringByAppendingPathComponent:@"sessions"];
 }
 
 static NSString *ArchivedSessionsRoot(void) {
-    return [HomePath() stringByAppendingPathComponent:CodexUsageArchivedSessionRelativePath];
+    return [CodexRoot() stringByAppendingPathComponent:@"archived_sessions"];
 }
 
 static id NullSafe(id value) {
@@ -302,55 +304,30 @@ static NSDictionary *RateWindowDictionary(NSDictionary *window) {
     };
 }
 
-static NSDate *NextLocalWindowReset(NSDate *now, NSNumber *windowMinutes) {
-    NSInteger minutes = windowMinutes.integerValue > 0 ? windowMinutes.integerValue : 300;
-    NSCalendar *calendar = [NSCalendar calendarWithIdentifier:NSCalendarIdentifierGregorian];
-    calendar.timeZone = [NSTimeZone timeZoneWithName:@"Asia/Shanghai"];
-
-    NSDateComponents *components = [calendar components:(NSCalendarUnitYear | NSCalendarUnitMonth | NSCalendarUnitDay | NSCalendarUnitHour)
-                                               fromDate:now];
-    components.minute = 0;
-    components.second = 0;
-    components.nanosecond = 0;
-    NSDate *hourStart = [calendar dateFromComponents:components];
-    return [calendar dateByAddingUnit:NSCalendarUnitMinute value:minutes toDate:hourStart options:0];
-}
-
-static NSDate *NextWindowResetAfterDate(NSDate *now, NSDate *resetDate, NSNumber *windowMinutes) {
-    if (!resetDate) {
-        return NextLocalWindowReset(now, windowMinutes);
-    }
-
-    NSInteger minutes = windowMinutes.integerValue > 0 ? windowMinutes.integerValue : 300;
-    NSTimeInterval windowSeconds = (NSTimeInterval)minutes * 60.0;
-    if ([resetDate compare:now] == NSOrderedDescending) {
-        return resetDate;
-    }
-
-    NSTimeInterval elapsed = [now timeIntervalSinceDate:resetDate];
-    NSInteger windowsToAdd = (NSInteger)floor(elapsed / windowSeconds) + 1;
-    return [resetDate dateByAddingTimeInterval:windowSeconds * windowsToAdd];
-}
-
+// A local log cannot establish the next server window after a reset.
+// Keep the observed reset time and hide expired percentages until Codex updates it.
 static NSDictionary *NormalizeLimitDictionary(NSDictionary *limits, NSDate *now) {
-    if (![limits isKindOfClass:NSDictionary.class]) {
-        return nil;
+    if (![limits isKindOfClass:NSDictionary.class]) return nil;
+    NSMutableDictionary *result = [limits mutableCopy];
+    for (NSString *key in @[@"primary", @"secondary"]) {
+        NSDictionary *window = [limits[key] isKindOfClass:NSDictionary.class] ? limits[key] : nil;
+        NSDate *reset = DisplayDateFromString(window[@"resetsAt"]);
+        if (window && reset && [reset compare:now] != NSOrderedDescending) {
+            NSMutableDictionary *expired = [window mutableCopy];
+            expired[@"usedPercent"] = NSNull.null;
+            result[key] = expired;
+        }
     }
+    return result;
+}
 
-    NSDictionary *primary = [limits[@"primary"] isKindOfClass:NSDictionary.class] ? limits[@"primary"] : nil;
-    NSString *resetsAt = StringOrNil(primary[@"resetsAt"]);
-    NSDate *resetDate = resetsAt ? CodexDateFromString(resetsAt) : nil;
-    if (!primary || !resetDate || [resetDate compare:now] == NSOrderedDescending) {
-        return limits;
-    }
-
-    NSMutableDictionary *normalized = [limits mutableCopy];
-    NSMutableDictionary *normalizedPrimary = [primary mutableCopy];
-    NSNumber *windowMinutes = NumberOrNil(primary[@"windowMinutes"]) ?: @300;
-    normalizedPrimary[@"resetsAt"] = LocalISOString(NextWindowResetAfterDate(now, resetDate, windowMinutes));
-    normalizedPrimary[@"windowMinutes"] = windowMinutes;
-    normalized[@"primary"] = normalizedPrimary;
-    return normalized;
+static NSString *WindowTitle(NSDictionary *window) {
+    NSInteger minutes = LongLongValue(window[@"windowMinutes"]);
+    if (minutes == 10080) return @"7 天";
+    if (minutes == 300) return @"5 小时";
+    if (minutes > 0 && minutes % 1440 == 0) return [NSString stringWithFormat:@"%ld 天", (long)(minutes / 1440)];
+    if (minutes > 0 && minutes % 60 == 0) return [NSString stringWithFormat:@"%ld 小时", (long)(minutes / 60)];
+    return minutes > 0 ? [NSString stringWithFormat:@"%ld 分钟", (long)minutes] : @"额度";
 }
 
 static NSDictionary *LimitDictionary(NSDictionary *rateLimits) {
@@ -358,7 +335,7 @@ static NSDictionary *LimitDictionary(NSDictionary *rateLimits) {
         return nil;
     }
 
-    if (![StringOrNil(rateLimits[@"limit_id"]) isEqualToString:@"codex"] || !StringOrNil(rateLimits[@"plan_type"])) {
+    if (StringOrNil(rateLimits[@"limit_id"]) && ![rateLimits[@"limit_id"] isEqualToString:@"codex"]) {
         return nil;
     }
 
@@ -402,6 +379,41 @@ static NSArray<NSString *> *JSONLFilesUnderRoot(NSString *root) {
     return [files sortedArrayUsingSelector:@selector(compare:)];
 }
 
+static NSMutableDictionary *TokenEventCache(void) {
+    static NSMutableDictionary *cache;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ cache = [NSMutableDictionary dictionary]; });
+    return cache;
+}
+
+static NSArray *TokenEventsInFile(NSString *file) {
+    NSDictionary *attributes = [NSFileManager.defaultManager attributesOfItemAtPath:file error:nil];
+    if (!attributes) return @[];
+    NSArray *signature = @[attributes[NSFileSize], attributes[NSFileModificationDate], attributes[NSFileSystemFileNumber]];
+    NSDictionary *cached = TokenEventCache()[file];
+    if ([cached[@"signature"] isEqual:signature]) return cached[@"events"];
+    NSData *data = [NSData dataWithContentsOfFile:file options:NSDataReadingMappedIfSafe error:nil];
+    if (!data) return @[];
+    NSMutableArray *events = [NSMutableArray array];
+    const uint8_t *bytes = data.bytes;
+    const char *needle = "\"token_count\"";
+    NSUInteger start = 0;
+    for (NSUInteger end = 0; end < data.length; end++) {
+        if (bytes[end] != '\n') continue; // Retry a partially written final line next time.
+        if (end > start && BytesContainNeedle(bytes, start, end, needle, strlen(needle))) {
+            NSData *line = [NSData dataWithBytes:bytes + start length:end - start];
+            NSDictionary *object = [NSJSONSerialization JSONObjectWithData:line options:0 error:nil];
+            NSDictionary *payload = [object isKindOfClass:NSDictionary.class] ? object[@"payload"] : nil;
+            if ([payload isKindOfClass:NSDictionary.class] && [payload[@"type"] isEqual:@"token_count"] && StringOrNil(object[@"timestamp"])) {
+                [events addObject:@{@"timestamp": object[@"timestamp"], @"payload": payload}];
+            }
+        }
+        start = end + 1;
+    }
+    TokenEventCache()[file] = @{@"signature": signature, @"events": events};
+    return events;
+}
+
 static NSDictionary *CollectUsage(NSError **errorOut) {
     NSFileManager *fileManager = NSFileManager.defaultManager;
     NSString *sessionsRoot = SessionsRoot();
@@ -437,62 +449,47 @@ static NSDictionary *CollectUsage(NSError **errorOut) {
     NSDate *lastEventAt = nil;
     NSDate *latestLimitAt = nil;
     NSDictionary *latestLimits = nil;
-    const char *needle = "\"token_count\"";
-    NSUInteger needleLength = strlen(needle);
-
+    NSMutableSet *removed = [NSMutableSet setWithArray:TokenEventCache().allKeys];
+    [removed minusSet:[NSSet setWithArray:files]];
+    [TokenEventCache() removeObjectsForKeys:removed.allObjects];
     for (NSString *file in files) {
-        NSData *data = [NSData dataWithContentsOfFile:file options:NSDataReadingMappedIfSafe error:nil];
-        if (!data.length) {
-            continue;
-        }
-
         BOOL fileHasUsage = NO;
-        const uint8_t *bytes = data.bytes;
-        NSUInteger length = data.length;
-        NSUInteger lineStart = 0;
+        NSNumber *previousTotal = nil;
+        for (NSDictionary *object in TokenEventsInFile(file)) {
+            @autoreleasepool {
+                NSDictionary *payload = object[@"payload"];
+                NSDate *timestamp = CodexDateFromString(StringOrNil(object[@"timestamp"]));
+                if (timestamp) {
+                    firstEventAt = firstEventAt ? [firstEventAt earlierDate:timestamp] : timestamp;
+                    lastEventAt = lastEventAt ? [lastEventAt laterDate:timestamp] : timestamp;
+                }
 
-        for (NSUInteger index = 0; index <= length; index++) {
-            if (index != length && bytes[index] != '\n') {
-                continue;
-            }
+                NSDictionary *limits = LimitDictionary(payload[@"rate_limits"]);
+                if (timestamp && limits && (!latestLimitAt || [timestamp compare:latestLimitAt] != NSOrderedAscending)) {
+                    latestLimitAt = timestamp;
+                    latestLimits = limits;
+                }
 
-            NSUInteger lineEnd = index;
-            if (lineEnd > lineStart && BytesContainNeedle(bytes, lineStart, lineEnd, needle, needleLength)) {
-                NSData *lineData = [NSData dataWithBytes:bytes + lineStart length:lineEnd - lineStart];
-                NSDictionary *object = [NSJSONSerialization JSONObjectWithData:lineData options:0 error:nil];
-                NSDictionary *payload = [object isKindOfClass:NSDictionary.class] ? object[@"payload"] : nil;
-                if ([payload isKindOfClass:NSDictionary.class] && [payload[@"type"] isEqualToString:@"token_count"]) {
-                    NSDate *timestamp = CodexDateFromString(StringOrNil(object[@"timestamp"]));
-                    if (timestamp) {
-                        firstEventAt = firstEventAt ? [firstEventAt earlierDate:timestamp] : timestamp;
-                        lastEventAt = lastEventAt ? [lastEventAt laterDate:timestamp] : timestamp;
+                NSDictionary *info = [payload[@"info"] isKindOfClass:NSDictionary.class] ? payload[@"info"] : nil;
+                NSDictionary *usage = [info[@"last_token_usage"] isKindOfClass:NSDictionary.class] ? info[@"last_token_usage"] : nil;
+                NSDictionary *total = [info[@"total_token_usage"] isKindOfClass:NSDictionary.class] ? info[@"total_token_usage"] : nil;
+                NSNumber *cumulative = NumberOrNil(total[@"total_tokens"]);
+                BOOL repeated = cumulative && previousTotal && [cumulative isEqualToNumber:previousTotal];
+                if (cumulative) previousTotal = cumulative;
+                if (timestamp && usage && NumberOrNil(usage[@"total_tokens"]) && !repeated) {
+                    fileHasUsage = YES;
+                    AddUsage(&allTime, usage);
+                    if ([timestamp compare:fiveHoursAgo] != NSOrderedAscending) {
+                        AddUsage(&last5h, usage);
                     }
-
-                    NSDictionary *limits = LimitDictionary(payload[@"rate_limits"]);
-                    if (timestamp && limits && (!latestLimitAt || [timestamp compare:latestLimitAt] != NSOrderedAscending)) {
-                        latestLimitAt = timestamp;
-                        latestLimits = limits;
+                    if ([timestamp compare:todayStart] != NSOrderedAscending) {
+                        AddUsage(&today, usage);
                     }
-
-                    NSDictionary *info = [payload[@"info"] isKindOfClass:NSDictionary.class] ? payload[@"info"] : nil;
-                    NSDictionary *usage = [info[@"last_token_usage"] isKindOfClass:NSDictionary.class] ? info[@"last_token_usage"] : nil;
-                    if (timestamp && usage && NumberOrNil(usage[@"total_tokens"])) {
-                        fileHasUsage = YES;
-                        AddUsage(&allTime, usage);
-                        if ([timestamp compare:fiveHoursAgo] != NSOrderedAscending) {
-                            AddUsage(&last5h, usage);
-                        }
-                        if ([timestamp compare:todayStart] != NSOrderedAscending) {
-                            AddUsage(&today, usage);
-                        }
-                        if ([timestamp compare:sevenDaysAgo] != NSOrderedAscending) {
-                            AddUsage(&last7d, usage);
-                        }
+                    if ([timestamp compare:sevenDaysAgo] != NSOrderedAscending) {
+                        AddUsage(&last7d, usage);
                     }
                 }
             }
-
-            lineStart = index + 1;
         }
 
         if (fileHasUsage) {
@@ -509,7 +506,8 @@ static NSDictionary *CollectUsage(NSError **errorOut) {
             @"filesScanned": @(files.count),
             @"sessionsWithUsage": @(sessionsWithUsage),
             @"firstEventAt": NullSafe(firstEventAt ? LocalISOString(firstEventAt) : nil),
-            @"lastEventAt": NullSafe(lastEventAt ? LocalISOString(lastEventAt) : nil)
+            @"lastEventAt": NullSafe(lastEventAt ? LocalISOString(lastEventAt) : nil),
+            @"limitsObservedAt": NullSafe(latestLimitAt ? LocalISOString(latestLimitAt) : nil)
         },
         @"limits": NormalizeLimitDictionary(latestLimits, now) ?: @{
             @"planType": [NSNull null],
@@ -536,7 +534,7 @@ static BOOL SaveSummary(NSDictionary *summary, NSError **errorOut) {
         return NO;
     }
 
-    NSArray<NSString *> *paths = @[SummaryPath(), WidgetContainerSummaryPath()];
+    NSArray<NSString *> *paths = @[SummaryPath()];
     BOOL wrote = NO;
     NSError *lastError = nil;
     for (NSString *path in paths) {
@@ -598,9 +596,8 @@ static NSDictionary *SecondaryLimit(NSDictionary *summary) {
 static BOOL ShouldDisplaySecondaryInStatus(NSDictionary *primary, NSDictionary *secondary) {
     NSNumber *primaryUsed = NumberOrNil(primary[@"usedPercent"]);
     NSNumber *secondaryUsed = NumberOrNil(secondary[@"usedPercent"]);
-    if (!primaryUsed || !secondaryUsed) {
-        return NO;
-    }
+    if (!secondaryUsed) return NO;
+    if (!primaryUsed) return YES;
 
     double primaryRemaining = RemainingPercentValue(primaryUsed);
     double secondaryRemaining = RemainingPercentValue(secondaryUsed);
@@ -826,7 +823,9 @@ static NSString *BucketCompactValue(NSDictionary *bucket) {
     [self updateWindowContent];
     [self refresh:nil];
     if (!self.showWindowOnLaunch) {
-        [NSTimer scheduledTimerWithTimeInterval:60 target:self selector:@selector(refresh:) userInfo:nil repeats:YES];
+        NSTimer *timer = [NSTimer scheduledTimerWithTimeInterval:60 target:self selector:@selector(refresh:) userInfo:nil repeats:YES];
+        timer.tolerance = 10;
+        [NSWorkspace.sharedWorkspace.notificationCenter addObserver:self selector:@selector(refresh:) name:NSWorkspaceDidWakeNotification object:nil];
     }
 
     if (self.showWindowOnLaunch) {
@@ -853,7 +852,7 @@ static NSString *BucketCompactValue(NSDictionary *bucket) {
 
     self.refreshing = YES;
 
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         NSError *error = nil;
         NSDictionary *summary = CollectAndSave(&error);
         dispatch_async(dispatch_get_main_queue(), ^{
@@ -879,9 +878,9 @@ static NSString *BucketCompactValue(NSDictionary *bucket) {
     NSDictionary *limit = StatusLimit(self.summary, &showsSecondary);
     NSNumber *usedPercent = NumberOrNil(limit[@"usedPercent"]);
     NSString *remainingText = RemainingPercentText(usedPercent);
-    NSString *reset = showsSecondary ? ResetDisplay(StringOrNil(limit[@"resetsAt"])) : ClockDisplay(StringOrNil(limit[@"resetsAt"]));
+    NSString *reset = ResetDisplay(StringOrNil(limit[@"resetsAt"]));
     NSString *statusTitle = [NSString stringWithFormat:@"%@ %@", remainingText, reset];
-    NSString *toolTip = showsSecondary ? @"Codex 使用情况 · 1 周窗口" : @"Codex 使用情况 · 5 小时窗口";
+    NSString *toolTip = [NSString stringWithFormat:@"Codex · %@窗口 · 本地日志快照 %@", WindowTitle(limit), ResetDisplay(self.summary[@"source"][@"limitsObservedAt"])];
     if (usedPercent) {
         double remaining = RemainingPercentValue(usedPercent);
         SetStatusDisplay(self.statusItem, statusTitle, remaining, YES, toolTip);
@@ -1058,21 +1057,16 @@ static NSString *BucketCompactValue(NSDictionary *bucket) {
         [meter.heightAnchor constraintEqualToConstant:30].active = YES;
         [stack addArrangedSubview:meter];
 
-        [stack addArrangedSubview:[self popoverRowWithTitle:@"5 小时剩余"
-                                                      value:RemainingPercentText(primary[@"usedPercent"])
-                                                 valueColor:UsageColorForRemaining(remaining)
-                                                 emphasized:YES]];
-        [stack addArrangedSubview:[self popoverRowWithTitle:@"5 小时刷新"
-                                                      value:ClockDisplay(StringOrNil(primary[@"resetsAt"]))
-                                                 emphasized:NO]];
-        double secondaryRemaining = RemainingPercentValue(secondary[@"usedPercent"]);
-        [stack addArrangedSubview:[self popoverRowWithTitle:@"1 周剩余"
-                                                      value:RemainingPercentText(secondary[@"usedPercent"])
-                                                 valueColor:UsageColorForRemaining(secondaryRemaining)
-                                                 emphasized:YES]];
-        [stack addArrangedSubview:[self popoverRowWithTitle:@"1 周刷新"
-                                                      value:ResetDisplay(StringOrNil(secondary[@"resetsAt"]))
-                                                 emphasized:NO]];
+        for (NSDictionary *window in @[primary ?: @{}, secondary ?: @{}]) {
+            if (!window.count) continue;
+            NSString *name = WindowTitle(window);
+            [stack addArrangedSubview:[self popoverRowWithTitle:[name stringByAppendingString:@"剩余"]
+                value:RemainingPercentText(window[@"usedPercent"])
+                valueColor:UsageColorForRemaining(RemainingPercentValue(window[@"usedPercent"])) emphasized:YES]];
+            NSDate *reset = DisplayDateFromString(window[@"resetsAt"]);
+            NSString *resetText = reset && [reset timeIntervalSinceNow] <= 0 ? @"已到期，等待 Codex 更新" : ResetDisplay(window[@"resetsAt"]);
+            [stack addArrangedSubview:[self popoverRowWithTitle:[name stringByAppendingString:@"重置"] value:resetText emphasized:NO]];
+        }
         [stack addArrangedSubview:[self popoverSeparator]];
         [stack addArrangedSubview:[self popoverRowWithTitle:@"最近 5 小时"
                                                       value:BucketCompactValue(UsageBucketDict(self.summary, @"last5h"))
@@ -1087,6 +1081,7 @@ static NSString *BucketCompactValue(NSDictionary *bucket) {
                                                       value:BucketCompactValue(UsageBucketDict(self.summary, @"allTime"))
                                                  emphasized:NO]];
         [stack addArrangedSubview:[self popoverSeparator]];
+        [stack addArrangedSubview:[self popoverRowWithTitle:@"额度快照（本地日志）" value:ResetDisplay(self.summary[@"source"][@"limitsObservedAt"]) emphasized:NO]];
         [stack addArrangedSubview:[self popoverRowWithTitle:@"更新"
                                                       value:ResetDisplay(StringOrNil(self.summary[@"updatedAt"]))
                                                  emphasized:NO]];
@@ -1302,20 +1297,16 @@ static NSString *BucketCompactValue(NSDictionary *bucket) {
     [meter.heightAnchor constraintEqualToConstant:32].active = YES;
     [stack addArrangedSubview:meter];
 
-    [stack addArrangedSubview:[self windowRowWithTitle:@"5 小时剩余"
-                                                 value:RemainingPercentText(primary[@"usedPercent"])
-                                            valueColor:UsageColorForRemaining(primaryRemaining)
-                                            emphasized:YES]];
-    [stack addArrangedSubview:[self windowRowWithTitle:@"5 小时刷新"
-                                                 value:ClockDisplay(StringOrNil(primary[@"resetsAt"]))
-                                            emphasized:NO]];
-    [stack addArrangedSubview:[self windowRowWithTitle:@"1 周剩余"
-                                                 value:RemainingPercentText(secondary[@"usedPercent"])
-                                            valueColor:UsageColorForRemaining(secondaryRemaining)
-                                            emphasized:YES]];
-    [stack addArrangedSubview:[self windowRowWithTitle:@"1 周刷新"
-                                                 value:ResetDisplay(StringOrNil(secondary[@"resetsAt"]))
-                                            emphasized:NO]];
+    for (NSDictionary *window in @[primary ?: @{}, secondary ?: @{}]) {
+        if (!window.count) continue;
+        NSString *name = WindowTitle(window);
+        [stack addArrangedSubview:[self windowRowWithTitle:[name stringByAppendingString:@"剩余"]
+            value:RemainingPercentText(window[@"usedPercent"])
+            valueColor:UsageColorForRemaining(RemainingPercentValue(window[@"usedPercent"])) emphasized:YES]];
+        NSDate *reset = DisplayDateFromString(window[@"resetsAt"]);
+        NSString *resetText = reset && [reset timeIntervalSinceNow] <= 0 ? @"已到期，等待 Codex 更新" : ResetDisplay(window[@"resetsAt"]);
+        [stack addArrangedSubview:[self windowRowWithTitle:[name stringByAppendingString:@"重置"] value:resetText emphasized:NO]];
+    }
     [stack addArrangedSubview:[self windowSeparator]];
     [stack addArrangedSubview:[self windowRowWithTitle:@"最近 5 小时" value:BucketCompactValue(last5h) emphasized:NO]];
     [stack addArrangedSubview:[self windowRowWithTitle:@"今日" value:BucketCompactValue(today) emphasized:NO]];
@@ -1358,8 +1349,8 @@ static void PrintSummary(NSDictionary *summary) {
     NSDictionary *primary = PrimaryLimit(summary);
     NSDictionary *secondary = SecondaryLimit(summary);
     printf("Updated: %s\n", [StringOrNil(summary[@"updatedAt"]) ?: @"--" UTF8String]);
-    printf("5h left: %s used %s reset %s\n", [RemainingPercentText(primary[@"usedPercent"]) UTF8String], [PercentText(primary[@"usedPercent"]) UTF8String], [ClockDisplay(StringOrNil(primary[@"resetsAt"])) UTF8String]);
-    printf("7d left: %s used %s reset %s\n", [RemainingPercentText(secondary[@"usedPercent"]) UTF8String], [PercentText(secondary[@"usedPercent"]) UTF8String], [ResetDisplay(StringOrNil(secondary[@"resetsAt"])) UTF8String]);
+    printf("Primary left: %s used %s reset %s\n", [RemainingPercentText(primary[@"usedPercent"]) UTF8String], [PercentText(primary[@"usedPercent"]) UTF8String], [ClockDisplay(StringOrNil(primary[@"resetsAt"])) UTF8String]);
+    printf("Secondary left: %s used %s reset %s\n", [RemainingPercentText(secondary[@"usedPercent"]) UTF8String], [PercentText(secondary[@"usedPercent"]) UTF8String], [ResetDisplay(StringOrNil(secondary[@"resetsAt"])) UTF8String]);
     printf("%s\n", [BucketLine(@"Today", UsageBucketDict(summary, @"today")) UTF8String]);
     printf("%s\n", [BucketLine(@"All time", UsageBucketDict(summary, @"allTime")) UTF8String]);
     printf("Summary: %s\n", [SummaryPath() UTF8String]);

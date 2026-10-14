@@ -10,10 +10,10 @@
 
 点击菜单栏项目后可以查看：
 
-- 5 小时窗口剩余额度和刷新时间
-- 7 天窗口剩余额度和刷新时间
+- 按账号实际返回的窗口显示剩余额度和重置时间（支持只有 7 天主窗口的账号）
+- 额度快照时间与本地采集时间分别显示
 - 当 7 天窗口更接近限制时，菜单栏会优先显示周剩余额度和周刷新时间
-- 最近 5 小时、今天、最近 7 天、累计 token 统计，并区分命中缓存和未命中缓存
+- 最近 5 小时、今天、最近 7 天、累计本机日志 token 统计，并区分命中缓存和未命中缓存
 - 紧凑的彩色进度条，颜色随剩余额度变化
 
 ## 效果图
@@ -35,6 +35,8 @@
 ~/.codex/archived_sessions/**/*.jsonl
 ```
 
+设置了 `CODEX_HOME` 时使用该目录；安装时会把该设置传递给登录启动任务。
+
 不会读取 `~/.codex/auth.json`，也不会上传任何 Codex 日志或 token 数据。
 
 ## 安装
@@ -47,20 +49,19 @@
 
 安装脚本会：
 
-- 构建菜单栏 App 和后台采集器
-- 优先安装到 `/Applications/Codex Usage.app`
-- 注册后台刷新任务
-- 启动菜单栏常驻项
-- 生成 App 图标
+- 只构建原生 Objective-C/AppKit 菜单栏程序（使用本机 CPU 架构）
+- 优先安装到 `/Applications/Codex Usage.app`，无写权限时安装到 `~/Applications`
+- 使用仓库中的图标，完成本地签名验证
+- 注册一个登录启动任务并启动菜单栏常驻项
+- 升级时保留旧 App 供恢复
 
-安装后会创建两个 LaunchAgent：
+安装后只创建一个 LaunchAgent：
 
 ```text
-~/Library/LaunchAgents/com.gukai.CodexUsage.collector.plist
 ~/Library/LaunchAgents/com.gukai.CodexUsage.menubar.plist
 ```
 
-后台采集器每 60 秒刷新一次，并写入：
+菜单栏进程每 60 秒刷新一次（允许 10 秒定时容差，唤醒后也会刷新），并写入：
 
 ```text
 ~/Library/Application Support/CodexUsage/usage_summary.json
@@ -119,27 +120,39 @@ Sources/CodexUsageWidgets
 Sources/CodexUsageMenuBar
 ```
 
-小组件功能不是当前主发布目标，菜单栏版本可以独立使用。
+小组件和 Swift 源码作为实验版本保留，不参与当前安装；本文描述的优化和测试针对 Objective-C 菜单栏版本。
 
-## 代码仓库
+## GitCode 来源
 
-本目录是独立 Git 仓库，配置两个远端：
+本机工作副本直接克隆自：
 
 ```text
-origin  https://gitcode.com/jumpgu/codex-usage-monitor.git
-github  https://github.com/jumpgu/codex-usage-monitor.git
+origin https://gitcode.com/jumpgu/codex-usage-monitor.git
 ```
 
-常规同步：
+安装不需要 GitCode 令牌；凭据不会写入 App、LaunchAgent 或仓库配置。
+
+## 本机优化与验证
+
+- 使用 `window_minutes` 生成窗口标题；没有第二窗口时不显示空的周额度行。
+- 额度重置过期后显示未知值，保留真实观察时间，等待新的 Codex 日志；不推算服务端重置时间。
+- 内存缓存未变化文件中的 token 事件，文件大小、修改时间或文件编号变化后重新解析；删除文件会清理缓存。
+- 以累计 token 数识别同一文件内重复的 token 通知，避免把重复通知再次累计。
+- 跳过损坏行与尚未写完的末行；不缓存对话正文，也不写入额外日志副本。
+- 取消独立的周期采集进程，避免与菜单栏进程重复扫描；不安装实验小组件或重启系统小组件服务。
+
+验证：
 
 ```sh
-git push origin main --tags
-git push github main --tags
+./Scripts/test.sh
+./Scripts/install.sh
 ```
 
-## 已知说明
+测试涵盖单周窗口、到期额度、旧格式、重复事件、缓存失效、未完成及损坏 JSON 行、删除文件。
 
-- reset 时间来自 Codex 本地 `token_count` 事件里的 rate limit 数据。
-- 如果最近的 5 小时窗口 reset 时间已经过期，工具会按当前本地窗口做兜底修正，避免显示旧窗口时间。
-- 菜单栏显示的是剩余额度，不是已用额度。
-- 小组件代码仍保留在仓库中，但当前发布目标是 macOS 菜单栏版本。
+## 数据含义与限制
+
+- 菜单栏百分比为**剩余额度**。本机日志中的额度快照可能早于其他设备上的使用情况，点击“刷新”仅重新读取本机日志，不主动查询账号服务器。
+- Codex 需要先写入包含额度的 `token_count` 事件，工具才能更新额度快照。
+- token 数为本机日志估计，不代表账单或账号配额；复制、分叉或恢复日志可能影响累计统计。
+- 实验 Swift/WidgetKit 实现未纳入本次修正与验证。

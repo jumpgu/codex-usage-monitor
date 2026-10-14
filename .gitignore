@@ -6,3 +6,6 @@
 DerivedData/
 Packaging/AppIcon.iconset/
 Sources/.DS_Store
+
+# Local deployment evidence and usage snapshots
+docs/local/

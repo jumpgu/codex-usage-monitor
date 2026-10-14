@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.1.7 - 2026-10-14
+
+- Name quota windows from their actual duration, including weekly primary windows.
+- Hide expired quota percentages until a new local snapshot arrives; preserve observed reset times.
+- Cache unchanged session token events and skip duplicate cumulative usage notifications.
+- Support CODEX_HOME, timer tolerance, and refresh after system wake.
+- Install only the native menu bar app with one login agent and preserve the previous app on upgrade.
+- Add regression tests for quota windows, duplicate events, malformed logs, and cache invalidation.
+
 ## v0.1.6 - 2026-06-17
 
 Quota priority release.
