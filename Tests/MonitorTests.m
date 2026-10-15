@@ -24,8 +24,48 @@
 }
 @end
 
-int main(void) {
+int main(int argc, const char *argv[]) {
     @autoreleasepool {
+        if (argc > 1 && strcmp(argv[1], "app-server") == 0) {
+            char *line = NULL; size_t capacity = 0;
+            if (getenv("QUOTA_TEST_TIMEOUT")) { sleep(3); return 0; }
+            while (getline(&line, &capacity, stdin) > 0) {
+                NSDictionary *request = [NSJSONSerialization JSONObjectWithData:[[NSString stringWithUTF8String:line] dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+                if ([request[@"method"] isEqual:@"initialize"]) {
+                    puts("{\"method\":\"test/notification\"}");
+                    puts("{\"id\":1,\"result\":{}}"); fflush(stdout);
+                } else if ([request[@"method"] isEqual:@"account/rateLimits/read"]) {
+                    if (getenv("QUOTA_TEST_ERROR")) puts("{\"id\":2,\"error\":{\"code\":-1}}");
+                    else puts("{\"id\":2,\"result\":{\"rateLimits\":{\"primary\":{\"usedPercent\":40,\"windowDurationMins\":10080,\"resetsAt\":2000000000}}}}");
+                    fflush(stdout);
+                } else if (![request[@"method"] isEqual:@"initialized"]) return 2;
+            }
+            free(line); return 0;
+        }
+        NSString *testExecutable = NSProcessInfo.processInfo.arguments.firstObject;
+        if (!testExecutable.isAbsolutePath) testExecutable = [NSFileManager.defaultManager.currentDirectoryPath stringByAppendingPathComponent:testExecutable];
+        NSError *quotaError = nil;
+        NSDictionary *live = QueryCodexQuota(testExecutable, 2, &quotaError);
+        assert(live && !quotaError && [LiveLimitDictionary(live)[@"primary"][@"usedPercent"] intValue] == 40);
+        setenv("QUOTA_TEST_ERROR", "1", 1);
+        assert(!QueryCodexQuota(testExecutable, 2, &quotaError) && quotaError);
+        unsetenv("QUOTA_TEST_ERROR");
+        setenv("QUOTA_TEST_TIMEOUT", "1", 1);
+        NSTimeInterval started = NSProcessInfo.processInfo.systemUptime;
+        assert(!QueryCodexQuota(testExecutable, 0.1, &quotaError));
+        assert(NSProcessInfo.processInfo.systemUptime - started < 1.5);
+        unsetenv("QUOTA_TEST_TIMEOUT");
+        assert(!QueryCodexQuota(@"/missing/codex", 0.1, &quotaError));
+        assert(!LiveLimitDictionary(@{@"rateLimitsByLimitId": @{@"other": @{}}, @"rateLimits": live[@"rateLimits"]}));
+        assert(!LiveLimitDictionary(@{@"rateLimits": @{@"primary": @{@"usedPercent": @101, @"windowDurationMins": @300}}}));
+        NSDictionary *old = @{@"source": @{@"limitsObservedAt": @"2026-10-15T11:00:00+08:00"}, @"limits": @{}};
+        NSDictionary *scan = @{@"source": @{@"limitsObservedAt": @"2026-10-15T10:00:00+08:00"}, @"limits": @{}, @"usage": @{@"test": @1}};
+        NSDictionary *failed = SummaryWithQuota(scan, old, nil, QuotaQueryError(@"test failure"));
+        assert([failed[@"source"][@"limitsObservedAt"] isEqual:old[@"source"][@"limitsObservedAt"]]);
+        assert([failed[@"source"][@"quotaQueryError"] isEqual:@"test failure"]);
+        NSDictionary *succeeded = SummaryWithQuota(scan, old, LiveLimitDictionary(live), nil);
+        assert([succeeded[@"source"][@"limitsOrigin"] isEqual:@"server"] && !succeeded[@"source"][@"quotaQueryError"]);
+        assert([succeeded[@"usage"] isEqual:scan[@"usage"]]);
         [NSApplication sharedApplication];
         [MonitorPreferences() removePersistentDomainForName:@"com.gukai.CodexUsage.tests"];
         CodexUsageAppDelegate *settings = [[CodexUsageAppDelegate alloc] init];

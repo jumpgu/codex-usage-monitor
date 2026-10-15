@@ -1,6 +1,8 @@
 #import <AppKit/AppKit.h>
 #import <Foundation/Foundation.h>
 #import "MonitoringSupport.h"
+#import "QuotaQuery.h"
+#include <math.h>
 
 typedef struct {
     long long events;
@@ -565,11 +567,68 @@ static NSDictionary *LoadSummary(void) {
     return [summary isKindOfClass:NSDictionary.class] ? summary : nil;
 }
 
-static NSDictionary *CollectAndSave(NSError **errorOut) {
-    NSDictionary *summary = CollectUsage(errorOut);
-    if (!summary) {
-        return nil;
+static NSDictionary *LiveLimitDictionary(NSDictionary *response) {
+    NSDictionary *buckets = [response[@"rateLimitsByLimitId"] isKindOfClass:NSDictionary.class] ? response[@"rateLimitsByLimitId"] : nil;
+    id value = buckets ? buckets[@"codex"] : response[@"rateLimits"];
+    if (![value isKindOfClass:NSDictionary.class]) return nil;
+    NSDictionary *raw = value;
+    if (raw[@"limitId"] && ![raw[@"limitId"] isEqual:@"codex"]) return nil;
+    NSMutableDictionary *mapped = [NSMutableDictionary dictionary];
+    for (NSString *key in @[@"primary", @"secondary"]) {
+        NSDictionary *window = [raw[key] isKindOfClass:NSDictionary.class] ? raw[key] : nil;
+        NSNumber *used = NumberOrNil(window[@"usedPercent"]);
+        NSNumber *minutes = NumberOrNil(window[@"windowDurationMins"]);
+        NSNumber *reset = NumberOrNil(window[@"resetsAt"]);
+        if (used && minutes && isfinite(used.doubleValue) && used.doubleValue >= 0 && used.doubleValue <= 100 && minutes.doubleValue > 0) {
+            mapped[key] = @{@"used_percent": used, @"window_minutes": minutes, @"resets_at": NullSafe(reset)};
+        }
     }
+    if (!mapped.count) return nil;
+    mapped[@"plan_type"] = NullSafe(StringOrNil(raw[@"planType"]));
+    mapped[@"rate_limit_reached_type"] = NullSafe(StringOrNil(raw[@"rateLimitReachedType"]));
+    return LimitDictionary(mapped);
+}
+
+static NSDictionary *SummaryWithQuota(NSDictionary *summary, NSDictionary *previous, NSDictionary *limits, NSError *queryError) {
+    NSMutableDictionary *result = [summary mutableCopy];
+    NSMutableDictionary *source = [summary[@"source"] mutableCopy] ?: [NSMutableDictionary dictionary];
+    if (limits) {
+        result[@"limits"] = NormalizeLimitDictionary(limits, NSDate.date);
+        source[@"limitsObservedAt"] = LocalISOString(NSDate.date);
+        source[@"limitsOrigin"] = @"server";
+        [source removeObjectForKey:@"quotaQueryError"];
+    } else {
+        NSDate *oldDate = DisplayDateFromString(previous[@"source"][@"limitsObservedAt"]);
+        NSDate *logDate = DisplayDateFromString(source[@"limitsObservedAt"]);
+        if (oldDate && (!logDate || [oldDate compare:logDate] != NSOrderedAscending)) {
+            result[@"limits"] = NormalizeLimitDictionary(previous[@"limits"], NSDate.date);
+            source[@"limitsObservedAt"] = previous[@"source"][@"limitsObservedAt"];
+            source[@"limitsOrigin"] = previous[@"source"][@"limitsOrigin"] ?: @"log";
+        } else {
+            source[@"limitsOrigin"] = @"log";
+        }
+        source[@"quotaQueryError"] = queryError.localizedDescription ?: @"未取得可用的账号额度，保留上次读数";
+    }
+    result[@"source"] = source;
+    return result;
+}
+
+static NSString *QuotaSourceTitle(NSDictionary *summary) {
+    return [summary[@"source"][@"limitsOrigin"] isEqual:@"server"] ? @"额度查询（账号）" : @"额度快照（本地日志）";
+}
+
+static NSDictionary *CollectAndSave(NSError **errorOut) {
+    NSDictionary *previous = LoadSummary();
+    NSError *collectionError = nil;
+    NSDictionary *summary = CollectUsage(&collectionError);
+    if (!summary) {
+        summary = @{@"version": @1, @"updatedAt": LocalISOString(NSDate.date),
+                    @"source": @{@"tokenCollectionError": collectionError.localizedDescription ?: @"本地日志采集失败"},
+                    @"usage": previous[@"usage"] ?: @{}, @"limits": previous[@"limits"] ?: @{}};
+    }
+    NSError *queryError = nil;
+    NSDictionary *response = QueryCodexQuota(CodexExecutable(), 15, &queryError);
+    summary = SummaryWithQuota(summary, previous, LiveLimitDictionary(response), queryError);
     if (!SaveSummary(summary, errorOut)) {
         return nil;
     }
@@ -866,7 +925,8 @@ static NSString *BucketCompactValue(NSDictionary *bucket) {
 - (BOOL)codexDataIsStale {
     NSDate *snapshot = DisplayDateFromString(self.summary[@"source"][@"limitsObservedAt"]);
     NSDate *scan = DisplayDateFromString(self.summary[@"updatedAt"]);
-    return DataIsStale(snapshot, NSDate.date) || DataIsStale(scan, NSDate.date) || self.lastErrorMessage.length > 0;
+    return DataIsStale(snapshot, NSDate.date) || DataIsStale(scan, NSDate.date) || self.lastErrorMessage.length > 0 ||
+        StringOrNil(self.summary[@"source"][@"quotaQueryError"]).length > 0;
 }
 
 - (void)checkFreshness:(id)sender {
@@ -1045,7 +1105,7 @@ static NSString *BucketCompactValue(NSDictionary *bucket) {
             self.refreshing = NO;
             if (summary) {
                 self.summary = summary;
-                self.lastErrorMessage = nil;
+                self.lastErrorMessage = StringOrNil(summary[@"source"][@"quotaQueryError"]) ?: StringOrNil(summary[@"source"][@"tokenCollectionError"]);
             } else if (error) {
                 self.lastErrorMessage = error.localizedDescription;
             }
@@ -1067,7 +1127,7 @@ static NSString *BucketCompactValue(NSDictionary *bucket) {
     NSString *reset = ResetDisplay(StringOrNil(limit[@"resetsAt"]));
     BOOL stale = [self codexDataIsStale];
     NSString *statusTitle = [NSString stringWithFormat:@"%@%@ %@", stale ? @"⚠︎ " : @"", remainingText, reset];
-    NSString *toolTip = [NSString stringWithFormat:@"Codex · %@窗口 · 本地日志快照 %@", WindowTitle(limit), ResetDisplay(self.summary[@"source"][@"limitsObservedAt"])];
+    NSString *toolTip = [NSString stringWithFormat:@"Codex · %@窗口 · %@ %@", WindowTitle(limit), QuotaSourceTitle(self.summary), ResetDisplay(self.summary[@"source"][@"limitsObservedAt"])];
     if (usedPercent) {
         double remaining = RemainingPercentValue(usedPercent);
         SetStatusDisplay(self.statusItem, statusTitle, remaining, YES, toolTip);
@@ -1075,7 +1135,7 @@ static NSString *BucketCompactValue(NSDictionary *bucket) {
         SetStatusDisplay(self.statusItem, statusTitle, 0, NO, @"Codex 使用情况");
     }
     if (stale) {
-        self.statusItem.button.toolTip = [toolTip stringByAppendingString:@" · 超过 3 分钟未取得新额度快照或采集失败，当前为旧读数"];
+        self.statusItem.button.toolTip = [toolTip stringByAppendingString:@" · 额度查询失败或超过 3 分钟未更新，当前为旧读数"];
         self.statusItem.button.contentTintColor = NSColor.systemOrangeColor;
     }
     self.statusItem.menu = nil;
@@ -1326,7 +1386,7 @@ static NSString *BucketCompactValue(NSDictionary *bucket) {
                                                       value:BucketCompactValue(UsageBucketDict(self.summary, @"allTime"))
                                                  emphasized:NO]];
         [stack addArrangedSubview:[self popoverSeparator]];
-        [stack addArrangedSubview:[self popoverRowWithTitle:@"额度快照（本地日志）" value:ResetDisplay(self.summary[@"source"][@"limitsObservedAt"]) emphasized:NO]];
+        [stack addArrangedSubview:[self popoverRowWithTitle:QuotaSourceTitle(self.summary) value:ResetDisplay(self.summary[@"source"][@"limitsObservedAt"]) emphasized:NO]];
         [stack addArrangedSubview:[self popoverRowWithTitle:@"更新"
                                                       value:ResetDisplay(StringOrNil(self.summary[@"updatedAt"]))
                                                  emphasized:NO]];
@@ -1350,7 +1410,7 @@ static NSString *BucketCompactValue(NSDictionary *bucket) {
     }
 
     if ([self codexDataIsStale]) {
-        NSTextField *warning = [self popoverLabelWithString:@"⚠︎ 额度快照超过 3 分钟或采集失败，当前为旧读数"
+        NSTextField *warning = [self popoverLabelWithString:@"⚠︎ 额度查询失败或超过 3 分钟未更新，当前为旧读数"
             font:[NSFont systemFontOfSize:11] color:NSColor.systemOrangeColor];
         warning.maximumNumberOfLines = 2;
         warning.lineBreakMode = NSLineBreakByWordWrapping;
@@ -1527,13 +1587,13 @@ static NSString *BucketCompactValue(NSDictionary *bucket) {
         [stack addArrangedSubview:details];
     }
     if ([self codexDataIsStale]) {
-        NSTextField *warning = [self windowLabelWithString:@"⚠︎ 超过 3 分钟未取得新额度快照或采集失败，当前为旧读数"
+        NSTextField *warning = [self windowLabelWithString:@"⚠︎ 额度查询失败或超过 3 分钟未更新，当前为旧读数"
             font:[NSFont systemFontOfSize:12] color:NSColor.systemOrangeColor];
         warning.maximumNumberOfLines = 2;
         warning.lineBreakMode = NSLineBreakByWordWrapping;
         [stack addArrangedSubview:warning];
     }
-    [stack addArrangedSubview:[self windowRowWithTitle:@"额度快照" value:ResetDisplay(self.summary[@"source"][@"limitsObservedAt"]) emphasized:NO]];
+    [stack addArrangedSubview:[self windowRowWithTitle:QuotaSourceTitle(self.summary) value:ResetDisplay(self.summary[@"source"][@"limitsObservedAt"]) emphasized:NO]];
 
     if (!self.summary) {
         NSTextField *emptyLabel = [self windowLabelWithString:@"暂无本地使用摘要"

@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.1.11 - 2026-10-15
+
+- 每分钟通过 Codex app-server 主动查询账号额度，复用现有登录态；token 用量保留本地日志缓存统计。
+- 查询子进程结束即退出，设置超时并处理错误；失败时保留上次读数及真实查询时间。
+- 区分账号查询和本地日志快照，新增协议、超时、无效响应及失败保留数据测试。
+
 ## v0.1.10 - 2026-10-15
 
 - Close the Codex popover on outside clicks, application switches, and Escape; remove event monitors immediately when closed.
