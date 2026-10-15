@@ -1,5 +1,6 @@
 #import <AppKit/AppKit.h>
 #import <Foundation/Foundation.h>
+#import "MonitoringSupport.h"
 
 typedef struct {
     long long events;
@@ -791,6 +792,18 @@ static NSString *BucketCompactValue(NSDictionary *bucket) {
 
 @interface CodexUsageAppDelegate : NSObject <NSApplicationDelegate>
 @property(nonatomic, strong) NSStatusItem *statusItem;
+@property(nonatomic, strong) NSStatusItem *diskStatusItem;
+@property(nonatomic, strong) NSTimer *diskTimer;
+@property(nonatomic, strong) NSDictionary *diskSnapshot;
+@property(nonatomic, copy) NSString *diskError;
+@property(nonatomic, assign) BOOL diskMonitoringEnabled;
+@property(nonatomic, assign) BOOL diskRefreshing;
+@property(nonatomic, assign) NSUInteger diskGeneration;
+- (void)refreshDisk:(id)sender;
+- (NSDictionary *)readDiskSnapshot:(NSError **)error;
+- (BOOL)acceptDiskSnapshot:(NSDictionary *)snapshot error:(NSError *)error generation:(NSUInteger)generation;
+- (void)updateDiskDisplay;
+- (void)preferencesChanged:(NSNotification *)notification;
 @property(nonatomic, strong) NSPopover *popover;
 @property(nonatomic, strong) NSWindow *window;
 @property(nonatomic, strong) NSTextField *windowTitleLabel;
@@ -818,19 +831,165 @@ static NSString *BucketCompactValue(NSDictionary *bucket) {
         self.statusItem.button.action = @selector(togglePopover:);
         [self.statusItem.button sendActionOn:(NSEventMaskLeftMouseUp | NSEventMaskRightMouseUp)];
     }
+    [NSDistributedNotificationCenter.defaultCenter addObserver:self selector:@selector(preferencesChanged:) name:PreferencesChangedNotification object:nil];
+    [self applyDiskPreference];
     self.summary = LoadSummary();
     [self rebuildMenu];
     [self updateWindowContent];
     [self refresh:nil];
-    if (!self.showWindowOnLaunch) {
-        NSTimer *timer = [NSTimer scheduledTimerWithTimeInterval:60 target:self selector:@selector(refresh:) userInfo:nil repeats:YES];
-        timer.tolerance = 10;
-        [NSWorkspace.sharedWorkspace.notificationCenter addObserver:self selector:@selector(refresh:) name:NSWorkspaceDidWakeNotification object:nil];
-    }
+    NSTimer *timer = [NSTimer timerWithTimeInterval:60 target:self selector:@selector(refresh:) userInfo:nil repeats:YES];
+    timer.tolerance = 10;
+    [NSRunLoop.mainRunLoop addTimer:timer forMode:NSRunLoopCommonModes];
+    NSTimer *health = [NSTimer timerWithTimeInterval:15 target:self selector:@selector(checkFreshness:) userInfo:nil repeats:YES];
+    health.tolerance = 2;
+    [NSRunLoop.mainRunLoop addTimer:health forMode:NSRunLoopCommonModes];
+    [NSWorkspace.sharedWorkspace.notificationCenter addObserver:self selector:@selector(didWake:) name:NSWorkspaceDidWakeNotification object:nil];
 
     if (self.showWindowOnLaunch) {
         [self showWindow:nil];
     }
+}
+
+- (void)didWake:(NSNotification *)notification {
+    [self checkFreshness:nil];
+    [self refresh:nil];
+    if (self.diskMonitoringEnabled) [self refreshDisk:nil];
+}
+
+- (BOOL)codexDataIsStale {
+    NSDate *snapshot = DisplayDateFromString(self.summary[@"source"][@"limitsObservedAt"]);
+    NSDate *scan = DisplayDateFromString(self.summary[@"updatedAt"]);
+    return DataIsStale(snapshot, NSDate.date) || DataIsStale(scan, NSDate.date) || self.lastErrorMessage.length > 0;
+}
+
+- (void)checkFreshness:(id)sender {
+    // Independent of collection completion, so a stalled read cannot keep a green status.
+    [self rebuildMenu];
+    if (self.diskMonitoringEnabled) [self updateDiskDisplay];
+    if (self.window.visible) [self updateWindowContent];
+}
+
+- (NSButton *)diskPreferenceButton {
+    NSButton *button = [NSButton checkboxWithTitle:@"在菜单栏显示磁盘剩余空间" target:self action:@selector(toggleDiskMonitoring:)];
+    button.state = [MonitorPreferences() boolForKey:DiskMonitoringPreference] ? NSControlStateValueOn : NSControlStateValueOff;
+    button.translatesAutoresizingMaskIntoConstraints = NO;
+    button.toolTip = @"默认关闭；勾选后开始读取系统数据卷容量，取消后停止后台监测";
+    return button;
+}
+
+- (void)toggleDiskMonitoring:(NSButton *)sender {
+    NSUserDefaults *preferences = MonitorPreferences();
+    [preferences setBool:sender.state == NSControlStateValueOn forKey:DiskMonitoringPreference];
+    [preferences synchronize];
+    [self preferencesChanged:nil];
+    [NSDistributedNotificationCenter.defaultCenter postNotificationName:PreferencesChangedNotification object:nil userInfo:nil deliverImmediately:YES];
+}
+
+- (void)preferencesChanged:(NSNotification *)notification {
+    [MonitorPreferences() synchronize];
+    [self applyDiskPreference];
+    if (self.popover.shown) [self updatePopoverContent];
+    if (self.window.visible) [self updateWindowContent];
+}
+
+- (void)applyDiskPreference {
+    // A separately opened dashboard edits the shared preference; only the resident app monitors.
+    if (self.showWindowOnLaunch) return;
+    [self setDiskMonitoringActive:[MonitorPreferences() boolForKey:DiskMonitoringPreference]];
+}
+
+- (void)setDiskMonitoringActive:(BOOL)enabled {
+    if (enabled == self.diskMonitoringEnabled) return;
+    self.diskMonitoringEnabled = enabled;
+    self.diskGeneration += 1; // Invalidate any read already in flight when the option changes.
+    [self.diskTimer invalidate];
+    self.diskTimer = nil;
+    self.diskRefreshing = NO;
+    self.diskSnapshot = nil;
+    self.diskError = nil;
+    if (!enabled) {
+        if (self.diskStatusItem) [NSStatusBar.systemStatusBar removeStatusItem:self.diskStatusItem];
+        self.diskStatusItem = nil;
+        return;
+    }
+    self.diskStatusItem = [NSStatusBar.systemStatusBar statusItemWithLength:NSVariableStatusItemLength];
+    self.diskStatusItem.autosaveName = @"com.gukai.CodexUsage.disk";
+    [self updateDiskDisplay];
+    [self refreshDisk:nil];
+    self.diskTimer = [NSTimer timerWithTimeInterval:60 target:self selector:@selector(refreshDisk:) userInfo:nil repeats:YES];
+    self.diskTimer.tolerance = 10;
+    [NSRunLoop.mainRunLoop addTimer:self.diskTimer forMode:NSRunLoopCommonModes];
+}
+
+- (NSDictionary *)readDiskSnapshot:(NSError **)error {
+    return ReadDiskSnapshot([NSURL fileURLWithPath:NSHomeDirectory() isDirectory:YES], error);
+}
+
+- (BOOL)acceptDiskSnapshot:(NSDictionary *)snapshot error:(NSError *)error generation:(NSUInteger)generation {
+    if (!self.diskMonitoringEnabled || generation != self.diskGeneration) return NO;
+    self.diskRefreshing = NO;
+    if (snapshot) {
+        self.diskSnapshot = snapshot;
+        self.diskError = nil;
+    } else {
+        self.diskError = error.localizedDescription ?: @"无法读取磁盘容量";
+    }
+    [self updateDiskDisplay];
+    return YES;
+}
+
+- (void)refreshDisk:(id)sender {
+    if (!self.diskMonitoringEnabled || self.diskRefreshing) return;
+    self.diskRefreshing = YES;
+    NSUInteger generation = self.diskGeneration;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        NSError *error = nil;
+        NSDictionary *snapshot = [self readDiskSnapshot:&error];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self acceptDiskSnapshot:snapshot error:error generation:generation];
+        });
+    });
+}
+
+- (void)updateDiskDisplay {
+    if (!self.diskMonitoringEnabled || !self.diskStatusItem) return;
+    BOOL stale = DataIsStale(self.diskSnapshot[@"observedAt"], NSDate.date) || self.diskError.length > 0;
+    NSInteger warning = DiskWarningLevel(self.diskSnapshot);
+    NSStatusBarButton *button = self.diskStatusItem.button;
+    button.image = [NSImage imageWithSystemSymbolName:@"internaldrive" accessibilityDescription:@"磁盘剩余空间"];
+    button.imagePosition = NSImageLeft;
+    NSString *space = self.diskSnapshot ? DiskCapacityText([self.diskSnapshot[@"available"] longLongValue]) : @"--";
+    button.title = [NSString stringWithFormat:@"%@余 %@", stale ? @"⚠︎ " : @"", space];
+    button.contentTintColor = stale || warning == 1 ? NSColor.systemOrangeColor : (warning == 2 ? NSColor.systemRedColor : nil);
+    button.toolTip = stale ? @"磁盘数据未更新或读取失败，当前为上次读数" : @"系统数据卷可用空间";
+    NSMenu *menu = [[NSMenu alloc] init];
+    if (self.diskSnapshot) {
+        long long total = [self.diskSnapshot[@"total"] longLongValue];
+        long long available = [self.diskSnapshot[@"available"] longLongValue];
+        for (NSString *line in @[
+            [NSString stringWithFormat:@"磁盘：%@", self.diskSnapshot[@"name"]],
+            [NSString stringWithFormat:@"总容量：%@", DiskCapacityText(total)],
+            [NSString stringWithFormat:@"可用空间：%@", DiskCapacityText(available)],
+            [NSString stringWithFormat:@"使用比例（估算）：%.1f%%", 100.0 * (total - available) / total],
+            [NSString stringWithFormat:@"读取时间：%@", ResetDisplay(LocalISOString(self.diskSnapshot[@"observedAt"]))],
+            [self.diskSnapshot[@"includesPurgeable"] boolValue] ? @"可用空间包含 macOS 可清理空间" : @"可用空间为当前空闲容量"]) {
+            [menu addItemWithTitle:line action:nil keyEquivalent:@""];
+        }
+    }
+    if (stale) [menu addItemWithTitle:self.diskError ?: @"⚠︎ 超过 3 分钟未取得新数据" action:nil keyEquivalent:@""];
+    if (warning > 0) [menu addItemWithTitle:@"⚠︎ 磁盘可用空间不足" action:nil keyEquivalent:@""];
+    [menu addItem:NSMenuItem.separatorItem];
+    NSMenuItem *refresh = [menu addItemWithTitle:@"立即刷新" action:@selector(refreshDisk:) keyEquivalent:@""];
+    refresh.target = self;
+    NSMenuItem *disable = [menu addItemWithTitle:@"关闭磁盘监测" action:@selector(disableDiskMonitoring:) keyEquivalent:@""];
+    disable.target = self;
+    self.diskStatusItem.menu = menu;
+}
+
+- (void)disableDiskMonitoring:(id)sender {
+    NSButton *button = [[NSButton alloc] init];
+    button.state = NSControlStateValueOff;
+    [self toggleDiskMonitoring:button];
 }
 
 - (void)applicationDidBecomeActive:(NSNotification *)notification {
@@ -879,13 +1038,18 @@ static NSString *BucketCompactValue(NSDictionary *bucket) {
     NSNumber *usedPercent = NumberOrNil(limit[@"usedPercent"]);
     NSString *remainingText = RemainingPercentText(usedPercent);
     NSString *reset = ResetDisplay(StringOrNil(limit[@"resetsAt"]));
-    NSString *statusTitle = [NSString stringWithFormat:@"%@ %@", remainingText, reset];
+    BOOL stale = [self codexDataIsStale];
+    NSString *statusTitle = [NSString stringWithFormat:@"%@%@ %@", stale ? @"⚠︎ " : @"", remainingText, reset];
     NSString *toolTip = [NSString stringWithFormat:@"Codex · %@窗口 · 本地日志快照 %@", WindowTitle(limit), ResetDisplay(self.summary[@"source"][@"limitsObservedAt"])];
     if (usedPercent) {
         double remaining = RemainingPercentValue(usedPercent);
         SetStatusDisplay(self.statusItem, statusTitle, remaining, YES, toolTip);
     } else {
         SetStatusDisplay(self.statusItem, statusTitle, 0, NO, @"Codex 使用情况");
+    }
+    if (stale) {
+        self.statusItem.button.toolTip = [toolTip stringByAppendingString:@" · 超过 3 分钟未取得新额度快照或采集失败，当前为旧读数"];
+        self.statusItem.button.contentTintColor = NSColor.systemOrangeColor;
     }
     self.statusItem.menu = nil;
     if (self.popover.shown) {
@@ -1104,6 +1268,14 @@ static NSString *BucketCompactValue(NSDictionary *bucket) {
         [stack addArrangedSubview:errorLabel];
     }
 
+    if ([self codexDataIsStale]) {
+        NSTextField *warning = [self popoverLabelWithString:@"⚠︎ 额度快照超过 3 分钟或采集失败，当前为旧读数"
+            font:[NSFont systemFontOfSize:11] color:NSColor.systemOrangeColor];
+        warning.maximumNumberOfLines = 2;
+        warning.lineBreakMode = NSLineBreakByWordWrapping;
+        [stack addArrangedSubview:warning];
+    }
+    [stack addArrangedSubview:[self diskPreferenceButton]];
     [stack addArrangedSubview:[self popoverButtonRow]];
 
     controller.view = content;
@@ -1121,8 +1293,9 @@ static NSString *BucketCompactValue(NSDictionary *bucket) {
 
 - (void)showWindow:(id)sender {
     [self.popover performClose:sender];
+    BOOL hadWindow = self.window != nil;
     [self ensureWindow];
-    [self updateWindowContent];
+    if (!hadWindow) [self updateWindowContent];
     [self.window makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
 }
@@ -1191,7 +1364,7 @@ static NSString *BucketCompactValue(NSDictionary *bucket) {
         return;
     }
 
-    NSRect frame = NSMakeRect(0, 0, 520, 430);
+    NSRect frame = NSMakeRect(0, 0, 520, 520);
     self.window = [[NSWindow alloc] initWithContentRect:frame
                                              styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable)
                                                backing:NSBackingStoreBuffered
@@ -1265,6 +1438,15 @@ static NSString *BucketCompactValue(NSDictionary *bucket) {
     [header addArrangedSubview:spacer];
     [header addArrangedSubview:updatedLabel];
     [stack addArrangedSubview:header];
+    [stack addArrangedSubview:[self diskPreferenceButton]];
+    if ([self codexDataIsStale]) {
+        NSTextField *warning = [self windowLabelWithString:@"⚠︎ 超过 3 分钟未取得新额度快照或采集失败，当前为旧读数"
+            font:[NSFont systemFontOfSize:12] color:NSColor.systemOrangeColor];
+        warning.maximumNumberOfLines = 2;
+        warning.lineBreakMode = NSLineBreakByWordWrapping;
+        [stack addArrangedSubview:warning];
+    }
+    [stack addArrangedSubview:[self windowRowWithTitle:@"额度快照" value:ResetDisplay(self.summary[@"source"][@"limitsObservedAt"]) emphasized:NO]];
 
     if (!self.summary) {
         NSTextField *emptyLabel = [self windowLabelWithString:@"暂无本地使用摘要"

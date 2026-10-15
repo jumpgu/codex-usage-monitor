@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+source "$ROOT/Scripts/toolchain.sh"
 BUILD_DIR="$ROOT/.build/objc"
 SDK="$(xcrun --sdk macosx --show-sdk-path)"
 

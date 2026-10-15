@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.1.8 - 2026-10-15
+
+- Add an opt-in, independent disk menu bar item with capacity details and low-space colors.
+- Start disk reads and the monitoring timer only after opt-in; cancel monitoring and reject in-flight results on opt-out.
+- Mark Codex snapshots and disk readings with a warning when they are stale for 180 seconds or reads fail.
+- Check freshness independently of refresh completion and immediately after system wake.
+- Discard resident stdout/stderr instead of appending periodic logs; keep disk snapshots in memory.
+- Add privacy declarations, settings and lifecycle regression tests, and a local Command Line Tools fallback.
+
 ## v0.1.7 - 2026-10-14
 
 - Name quota windows from their actual duration, including weekly primary windows.

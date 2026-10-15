@@ -1,6 +1,7 @@
 #!/bin/zsh
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+source "$ROOT/Scripts/toolchain.sh"
 APP_DIR="/Applications/Codex Usage.app"
 [[ -w /Applications ]] || APP_DIR="$HOME/Applications/Codex Usage.app"
 SUPPORT_DIR="$HOME/Library/Application Support/CodexUsage"
@@ -17,6 +18,7 @@ STAGED_APP="$STAGING/Codex Usage.app"
 mkdir -p "$STAGED_APP/Contents/MacOS" "$STAGED_APP/Contents/Resources"
 cp "$ROOT/.build/objc/CodexUsageMonitor" "$STAGED_APP/Contents/MacOS/"
 cp "$ROOT/Packaging/AppIcon.icns" "$STAGED_APP/Contents/Resources/"
+cp "$ROOT/Packaging/PrivacyInfo.xcprivacy" "$STAGED_APP/Contents/Resources/"
 python3 - "$STAGED_APP" "$MENUBAR_PLIST" "$APP_DIR" <<'PY'
 import os,sys,plistlib
 staged,agent,app=sys.argv[1:]
@@ -24,15 +26,14 @@ info=dict(CFBundleDevelopmentRegion='zh_CN',CFBundleDisplayName='Codex Usage',
           CFBundleExecutable='CodexUsageMonitor',CFBundleIconFile='AppIcon',
           CFBundleIdentifier='com.gukai.CodexUsage',CFBundleInfoDictionaryVersion='6.0',
           CFBundleName='Codex Usage',CFBundlePackageType='APPL',
-          CFBundleShortVersionString='0.1.7',CFBundleVersion='8',
+          CFBundleShortVersionString='0.1.8',CFBundleVersion='9',
           LSMinimumSystemVersion='13.0',NSHighResolutionCapable=True)
 with open(staged+'/Contents/Info.plist','wb') as f: plistlib.dump(info,f)
 job=dict(Label='com.gukai.CodexUsage.menubar',
          ProgramArguments=[app+'/Contents/MacOS/CodexUsageMonitor','--menubar'],
          RunAtLoad=True,KeepAlive={'SuccessfulExit':False},ThrottleInterval=10,
          ProcessType='Interactive',
-         StandardErrorPath=os.path.expanduser('~/Library/Logs/CodexUsage.menubar.err.log'),
-         StandardOutPath=os.path.expanduser('~/Library/Logs/CodexUsage.menubar.out.log'))
+         StandardErrorPath='/dev/null',StandardOutPath='/dev/null')
 if os.environ.get('CODEX_HOME'):
     job['EnvironmentVariables']={'CODEX_HOME':os.path.abspath(os.path.expanduser(os.environ['CODEX_HOME']))}
 with open(agent+'.pending','wb') as f: plistlib.dump(job,f)
