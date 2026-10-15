@@ -1018,16 +1018,36 @@ static NSString *BucketCompactValue(NSDictionary *bucket) {
     });
 }
 
+static NSImage *DiskStatusDisplayImage(NSString *title) {
+    NSDictionary *attributes = @{
+        NSForegroundColorAttributeName: NSColor.whiteColor,
+        NSFontAttributeName: [NSFont menuBarFontOfSize:0]
+    };
+    NSSize textSize = [title sizeWithAttributes:attributes];
+    NSImage *image = [[NSImage alloc] initWithSize:NSMakeSize(ceil(textSize.width) + 22, 18)];
+    [image lockFocus];
+    NSImage *symbol = [[NSImage imageWithSystemSymbolName:@"internaldrive" accessibilityDescription:nil]
+        imageWithSymbolConfiguration:[NSImageSymbolConfiguration configurationWithPaletteColors:@[NSColor.whiteColor]]];
+    [symbol drawInRect:NSMakeRect(0, 1, 17, 16)];
+    [title drawAtPoint:NSMakePoint(22, floor((18 - textSize.height) / 2)) withAttributes:attributes];
+    [image unlockFocus];
+    image.template = NO;
+    return image;
+}
+
 - (void)updateDiskDisplay {
     if (!self.diskMonitoringEnabled || !self.diskStatusItem) return;
     BOOL stale = DataIsStale(self.diskSnapshot[@"observedAt"], NSDate.date) || self.diskError.length > 0;
     NSInteger warning = DiskWarningLevel(self.diskSnapshot);
     NSStatusBarButton *button = self.diskStatusItem.button;
-    button.image = [NSImage imageWithSystemSymbolName:@"internaldrive" accessibilityDescription:@"磁盘剩余空间"];
-    button.imagePosition = NSImageLeft;
     NSString *space = self.diskSnapshot ? DiskCapacityText([self.diskSnapshot[@"available"] longLongValue]) : @"--";
-    button.title = [NSString stringWithFormat:@"%@余 %@", stale ? @"⚠︎ " : @"", space];
-    button.contentTintColor = stale || warning == 1 ? NSColor.systemOrangeColor : (warning == 2 ? NSColor.systemRedColor : nil);
+    NSString *title = [NSString stringWithFormat:@"%@余 %@", stale ? @"⚠︎ " : @"", space];
+    button.title = @"";
+    button.attributedTitle = [[NSAttributedString alloc] initWithString:@""];
+    button.image = DiskStatusDisplayImage(title);
+    button.imagePosition = NSImageOnly;
+    button.contentTintColor = nil;
+    button.accessibilityLabel = [@"磁盘剩余空间 " stringByAppendingString:title];
     button.toolTip = stale ? @"磁盘数据未更新或读取失败，当前为上次读数" : @"系统数据卷可用空间";
     // Never replace a menu while AppKit is tracking its outside-click dismissal.
     if (self.diskMenuTracking) return;

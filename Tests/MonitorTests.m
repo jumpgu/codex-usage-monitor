@@ -67,6 +67,23 @@ int main(int argc, const char *argv[]) {
         assert([succeeded[@"source"][@"limitsOrigin"] isEqual:@"server"] && !succeeded[@"source"][@"quotaQueryError"]);
         assert([succeeded[@"usage"] isEqual:scan[@"usage"]]);
         [NSApplication sharedApplication];
+        for (NSString *appearanceName in @[NSAppearanceNameAqua, NSAppearanceNameDarkAqua]) {
+            [[NSAppearance appearanceNamed:appearanceName] performAsCurrentDrawingAppearance:^{
+                NSImage *diskImage = DiskStatusDisplayImage(@"余 128 GB");
+                assert(!diskImage.template && diskImage.size.height == 18);
+                NSBitmapImageRep *pixels = [NSBitmapImageRep imageRepWithData:diskImage.TIFFRepresentation];
+                NSInteger whitePixels = 0;
+                for (NSInteger y = 0; y < pixels.pixelsHigh; y++) {
+                    for (NSInteger x = 0; x < pixels.pixelsWide; x++) {
+                        NSColor *color = [[pixels colorAtX:x y:y] colorUsingColorSpace:NSColorSpace.deviceRGBColorSpace];
+                        if (color.alphaComponent < 0.8) continue;
+                        assert(color.redComponent > 0.95 && color.greenComponent > 0.95 && color.blueComponent > 0.95);
+                        whitePixels++;
+                    }
+                }
+                assert(whitePixels > 20);
+            }];
+        }
         [MonitorPreferences() removePersistentDomainForName:@"com.gukai.CodexUsage.tests"];
         CodexUsageAppDelegate *settings = [[CodexUsageAppDelegate alloc] init];
         settings.showWindowOnLaunch = YES;

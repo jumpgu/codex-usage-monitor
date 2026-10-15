@@ -63,7 +63,7 @@ static NSDictionary *QueryCodexQuota(NSString *executable, NSTimeInterval timeou
     NSDictionary *result = nil;
     @try {
         if (!SendQuotaMessage(inFD, @{@"id": @1, @"method": @"initialize", @"params": @{
-            @"clientInfo": @{@"name": @"codex_usage_monitor", @"title": @"Codex Usage", @"version": @"0.1.11"}
+            @"clientInfo": @{@"name": @"codex_usage_monitor", @"title": @"Codex Usage", @"version": @"0.1.12"}
         }})) {
             failure = @"Codex 额度查询连接已断开";
         } else {
