@@ -790,7 +790,7 @@ static NSString *BucketCompactValue(NSDictionary *bucket) {
 
 @end
 
-@interface CodexUsageAppDelegate : NSObject <NSApplicationDelegate>
+@interface CodexUsageAppDelegate : NSObject <NSApplicationDelegate, NSPopoverDelegate, NSMenuDelegate>
 @property(nonatomic, strong) NSStatusItem *statusItem;
 @property(nonatomic, strong) NSStatusItem *diskStatusItem;
 @property(nonatomic, strong) NSTimer *diskTimer;
@@ -805,6 +805,12 @@ static NSString *BucketCompactValue(NSDictionary *bucket) {
 - (void)updateDiskDisplay;
 - (void)preferencesChanged:(NSNotification *)notification;
 @property(nonatomic, strong) NSPopover *popover;
+@property(nonatomic, strong) id localPopoverMonitor;
+@property(nonatomic, strong) id globalPopoverMonitor;
+@property(nonatomic, assign) BOOL diskMenuTracking;
+- (void)closePopover;
+- (void)stopPopoverEventMonitors;
+- (void)startPopoverEventMonitors;
 @property(nonatomic, strong) NSWindow *window;
 @property(nonatomic, strong) NSTextField *windowTitleLabel;
 @property(nonatomic, strong) NSTextField *windowLimitLabel;
@@ -844,6 +850,7 @@ static NSString *BucketCompactValue(NSDictionary *bucket) {
     health.tolerance = 2;
     [NSRunLoop.mainRunLoop addTimer:health forMode:NSRunLoopCommonModes];
     [NSWorkspace.sharedWorkspace.notificationCenter addObserver:self selector:@selector(didWake:) name:NSWorkspaceDidWakeNotification object:nil];
+    [NSWorkspace.sharedWorkspace.notificationCenter addObserver:self selector:@selector(workspaceApplicationActivated:) name:NSWorkspaceDidActivateApplicationNotification object:nil];
 
     if (self.showWindowOnLaunch) {
         [self showWindow:nil];
@@ -962,7 +969,11 @@ static NSString *BucketCompactValue(NSDictionary *bucket) {
     button.title = [NSString stringWithFormat:@"%@余 %@", stale ? @"⚠︎ " : @"", space];
     button.contentTintColor = stale || warning == 1 ? NSColor.systemOrangeColor : (warning == 2 ? NSColor.systemRedColor : nil);
     button.toolTip = stale ? @"磁盘数据未更新或读取失败，当前为上次读数" : @"系统数据卷可用空间";
-    NSMenu *menu = [[NSMenu alloc] init];
+    // Never replace a menu while AppKit is tracking its outside-click dismissal.
+    if (self.diskMenuTracking) return;
+    NSMenu *menu = self.diskStatusItem.menu ?: [[NSMenu alloc] init];
+    menu.delegate = self;
+    [menu removeAllItems];
     if (self.diskSnapshot) {
         long long total = [self.diskSnapshot[@"total"] longLongValue];
         long long available = [self.diskSnapshot[@"available"] longLongValue];
@@ -992,16 +1003,32 @@ static NSString *BucketCompactValue(NSDictionary *bucket) {
     [self toggleDiskMonitoring:button];
 }
 
-- (void)applicationDidBecomeActive:(NSNotification *)notification {
-    if (self.showWindowOnLaunch) {
-        return;
+- (void)applicationDidResignActive:(NSNotification *)notification {
+    [self closePopover];
+}
+
+- (void)workspaceApplicationActivated:(NSNotification *)notification {
+    NSRunningApplication *application = notification.userInfo[NSWorkspaceApplicationKey];
+    if (application.processIdentifier != NSProcessInfo.processInfo.processIdentifier) [self closePopover];
+}
+
+- (void)menuWillOpen:(NSMenu *)menu {
+    if (menu == self.diskStatusItem.menu) {
+        self.diskMenuTracking = YES;
+        [self closePopover];
     }
-    if ([[NSDate date] timeIntervalSinceDate:self.launchDate] < 1.5) {
-        return;
+}
+
+- (void)menuDidClose:(NSMenu *)menu {
+    if (menu == self.diskStatusItem.menu) {
+        self.diskMenuTracking = NO;
+        dispatch_async(dispatch_get_main_queue(), ^{ [self updateDiskDisplay]; });
     }
-    if (!self.window.visible) {
-        [self showWindow:nil];
-    }
+}
+
+- (void)showDiskDetails:(id)sender {
+    [self closePopover];
+    [self.diskStatusItem.button performClick:sender];
 }
 
 - (void)refresh:(id)sender {
@@ -1059,7 +1086,7 @@ static NSString *BucketCompactValue(NSDictionary *bucket) {
 
 - (void)togglePopover:(id)sender {
     if (self.popover.shown) {
-        [self.popover performClose:sender];
+        [self closePopover];
         return;
     }
 
@@ -1074,12 +1101,66 @@ static NSString *BucketCompactValue(NSDictionary *bucket) {
     if (!self.popover) {
         self.popover = [[NSPopover alloc] init];
         self.popover.behavior = NSPopoverBehaviorTransient;
-        self.popover.animates = YES;
+        self.popover.animates = NO;
+        self.popover.delegate = self;
     }
     [self updatePopoverContent];
     [self.popover showRelativeToRect:self.statusItem.button.bounds
                                ofView:self.statusItem.button
                         preferredEdge:NSRectEdgeMinY];
+    if (self.popover.shown) [self startPopoverEventMonitors];
+}
+
+- (void)handlePopoverMouseAtPoint:(NSPoint)point {
+    if (!self.popover.shown) return;
+    NSWindow *panel = self.popover.contentViewController.view.window;
+    NSStatusBarButton *button = self.statusItem.button;
+    NSRect buttonFrame = button.window ? [button.window convertRectToScreen:[button convertRect:button.bounds toView:nil]] : NSZeroRect;
+    if (ShouldDismissPopoverClick(point, panel.frame, buttonFrame)) [self closePopover];
+}
+
+- (void)startPopoverEventMonitors {
+    [self stopPopoverEventMonitors];
+    __weak typeof(self) weakSelf = self;
+    NSEventMask clicks = NSEventMaskLeftMouseDown | NSEventMaskRightMouseDown | NSEventMaskOtherMouseDown;
+    self.localPopoverMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:clicks | NSEventMaskKeyDown handler:^NSEvent *(NSEvent *event) {
+        if (event.type == NSEventTypeKeyDown) {
+            if (event.keyCode == 53 && weakSelf.popover.shown) {
+                [weakSelf closePopover];
+                return nil;
+            }
+        } else {
+            NSPoint point = event.window ? [event.window convertPointToScreen:event.locationInWindow] : NSEvent.mouseLocation;
+            [weakSelf handlePopoverMouseAtPoint:point];
+        }
+        return event; // Preserve delivery of the original click to the other window.
+    }];
+    // Mouse clicks only: no global keyboard monitoring or accessibility permission.
+    self.globalPopoverMonitor = [NSEvent addGlobalMonitorForEventsMatchingMask:clicks handler:^(NSEvent *event) {
+        [weakSelf handlePopoverMouseAtPoint:NSEvent.mouseLocation];
+    }];
+}
+
+- (void)stopPopoverEventMonitors {
+    if (self.localPopoverMonitor) [NSEvent removeMonitor:self.localPopoverMonitor];
+    if (self.globalPopoverMonitor) [NSEvent removeMonitor:self.globalPopoverMonitor];
+    self.localPopoverMonitor = nil;
+    self.globalPopoverMonitor = nil;
+}
+
+- (void)closePopover {
+    [self stopPopoverEventMonitors];
+    [self.popover close];
+}
+
+- (void)popoverDidClose:(NSNotification *)notification {
+    [self stopPopoverEventMonitors];
+}
+
+- (void)applicationWillTerminate:(NSNotification *)notification {
+    [self stopPopoverEventMonitors];
+    [NSWorkspace.sharedWorkspace.notificationCenter removeObserver:self];
+    [NSDistributedNotificationCenter.defaultCenter removeObserver:self];
 }
 
 - (void)updatePopoverContent {

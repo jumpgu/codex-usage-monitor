@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.1.10 - 2026-10-15
+
+- Close the Codex popover on outside clicks, application switches, and Escape; remove event monitors immediately when closed.
+- Keep the disk menu stable while open so periodic refresh cannot interrupt dismissal.
+- Implement the disk details shortcut and add popup lifecycle regression tests.
+
 ## v0.1.9 - 2026-10-15
 
 - Compress previous app versions instead of leaving indexed app bundles behind after upgrades.

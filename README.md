@@ -26,6 +26,10 @@
 | --- | --- |
 | <img src="docs/images/popover.png" alt="Codex Usage 菜单栏展开面板" width="360"> | <img src="docs/images/dashboard.png" alt="Codex Usage 主窗口" width="520"> |
 
+## 菜单栏面板交互
+
+点击面板外部、切换到其他应用或按 Escape，会立即关闭 Codex 面板。外部点击仍传给原应用；事件监测只在面板展开时存在，不记录点击，也不监听其他应用的键盘。磁盘菜单展开期间保持同一菜单对象，避免后台刷新干扰关闭。
+
 ## 可选磁盘监测
 
 在主窗口或 Codex 菜单栏展开面板勾选 **在菜单栏显示磁盘剩余空间**。此选项默认关闭，并记住选择。

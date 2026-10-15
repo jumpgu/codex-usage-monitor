@@ -56,3 +56,7 @@ static NSInteger DiskWarningLevel(NSDictionary *snapshot) {
     if (available <= 10000000000.0 || available / total <= 0.10) return 1;
     return 0;
 }
+
+static BOOL ShouldDismissPopoverClick(NSPoint point, NSRect popoverFrame, NSRect statusButtonFrame) {
+    return !NSPointInRect(point, popoverFrame) && !NSPointInRect(point, statusButtonFrame);
+}

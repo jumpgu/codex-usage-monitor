@@ -13,6 +13,17 @@
 }
 @end
 
+@interface TestPopover : NSPopover
+@property(nonatomic, assign) BOOL testShown;
+@end
+@implementation TestPopover
+- (BOOL)isShown { return self.testShown; }
+- (void)close {
+    self.testShown = NO;
+    [self.delegate popoverDidClose:[NSNotification notificationWithName:NSPopoverDidCloseNotification object:self]];
+}
+@end
+
 int main(void) {
     @autoreleasepool {
         [NSApplication sharedApplication];
@@ -31,6 +42,42 @@ int main(void) {
         NSError *capacityError = nil;
         NSDictionary *actualDisk = ReadDiskSnapshot([NSURL fileURLWithPath:NSHomeDirectory()], &capacityError);
         assert(actualDisk && !capacityError && [actualDisk[@"total"] longLongValue] > 0);
+        NSRect panel = NSMakeRect(-300, 200, 250, 300);
+        NSRect anchor = NSMakeRect(-200, 520, 100, 24);
+        assert(!ShouldDismissPopoverClick(NSMakePoint(-150, 350), panel, anchor));
+        assert(!ShouldDismissPopoverClick(NSMakePoint(-150, 530), panel, anchor));
+        assert(ShouldDismissPopoverClick(NSMakePoint(10, 10), panel, anchor));
+        assert(ShouldDismissPopoverClick(NSMakePoint(-400, 300), panel, anchor));
+        CodexUsageAppDelegate *popup = [[CodexUsageAppDelegate alloc] init];
+        TestPopover *popover = [[TestPopover alloc] init];
+        popover.delegate = popup;
+        popover.testShown = YES;
+        popup.popover = popover;
+        [popup startPopoverEventMonitors];
+        assert(popup.localPopoverMonitor != nil);
+        [popup applicationDidResignActive:[NSNotification notificationWithName:NSApplicationDidResignActiveNotification object:NSApp]];
+        assert(!popover.shown && !popup.localPopoverMonitor && !popup.globalPopoverMonitor);
+        popover.testShown = YES;
+        [popup startPopoverEventMonitors];
+        [popup startPopoverEventMonitors];
+        [popup closePopover];
+        [popup closePopover];
+        assert(!popover.shown && !popup.localPopoverMonitor && !popup.globalPopoverMonitor);
+        popup.diskMonitoringEnabled = YES;
+        popup.diskSnapshot = @{@"total": @1000000000000LL, @"available": @500000000000LL, @"observedAt": NSDate.date, @"name": @"test"};
+        popup.diskStatusItem = [NSStatusBar.systemStatusBar statusItemWithLength:NSVariableStatusItemLength];
+        [popup updateDiskDisplay];
+        NSMenu *diskMenu = popup.diskStatusItem.menu;
+        NSInteger itemCount = diskMenu.numberOfItems;
+        [popup menuWillOpen:diskMenu];
+        assert(popup.diskMenuTracking);
+        [popup updateDiskDisplay];
+        assert(popup.diskStatusItem.menu == diskMenu && diskMenu.numberOfItems == itemCount);
+        [popup menuDidClose:diskMenu];
+        assert(!popup.diskMenuTracking);
+        [popup updateDiskDisplay];
+        assert(popup.diskStatusItem.menu == diskMenu);
+        [popup setDiskMonitoringActive:NO];
         NSDate *now = [NSDate date];
         assert(!DataIsStale([now dateByAddingTimeInterval:-179], now));
         assert(DataIsStale([now dateByAddingTimeInterval:-180], now));
@@ -109,6 +156,6 @@ int main(void) {
         assert([summary[@"source"][@"filesScanned"] intValue] == 0);
         assert(TokenEventCache().count == 0);
         [NSFileManager.defaultManager removeItemAtPath:root error:nil];
-        puts("PASS: disk opt-in/no disabled reads, timer cancellation, in-flight result rejection, failed reads, 180-second freshness, weekly window, expired limits, duplicate events, cache invalidation, malformed logs");
+        puts("PASS: popup outside-click geometry, app-switch close, monitor cleanup, stable disk menu, disk opt-in/no disabled reads, timer cancellation, in-flight result rejection, failed reads, 180-second freshness, weekly window, expired limits, duplicate events, cache invalidation, malformed logs");
     }
 }
