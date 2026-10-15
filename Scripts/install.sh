@@ -26,7 +26,7 @@ info=dict(CFBundleDevelopmentRegion='zh_CN',CFBundleDisplayName='Codex Usage',
           CFBundleExecutable='CodexUsageMonitor',CFBundleIconFile='AppIcon',
           CFBundleIdentifier='com.gukai.CodexUsage',CFBundleInfoDictionaryVersion='6.0',
           CFBundleName='Codex Usage',CFBundlePackageType='APPL',
-          CFBundleShortVersionString='0.1.8',CFBundleVersion='9',
+          CFBundleShortVersionString='0.1.9',CFBundleVersion='10',
           LSMinimumSystemVersion='13.0',NSHighResolutionCapable=True)
 with open(staged+'/Contents/Info.plist','wb') as f: plistlib.dump(info,f)
 job=dict(Label='com.gukai.CodexUsage.menubar',
@@ -43,9 +43,14 @@ codesign --verify --deep --strict "$STAGED_APP"
 launchctl bootout "$DOMAIN/com.gukai.CodexUsage.collector" >/dev/null 2>&1 || true
 launchctl bootout "$DOMAIN/com.gukai.CodexUsage.menubar" >/dev/null 2>&1 || true
 rm -f "$COLLECTOR_PLIST"
-# Keep the previous app recoverable when upgrading.
+# Keep recovery copies compressed so macOS cannot index them as extra apps.
 if [[ -d "$APP_DIR" ]]; then
-  mv "$APP_DIR" "$SUPPORT_DIR/Codex Usage.previous.$(date +%Y%m%d%H%M%S).app"
+  mkdir -p "$SUPPORT_DIR/Backups"
+  ARCHIVE="$SUPPORT_DIR/Backups/CodexUsage-$(date +%Y%m%d%H%M%S).tar.gz"
+  tar -czf "$STAGING/previous.tar.gz" -C "$(dirname "$APP_DIR")" "$(basename "$APP_DIR")"
+  mv "$STAGING/previous.tar.gz" "$ARCHIVE"
+  /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u "$APP_DIR" >/dev/null 2>&1 || true
+  mv "$APP_DIR" "$STAGING/previous.retired"
 fi
 mkdir -p "$(dirname "$APP_DIR")"
 mv "$STAGED_APP" "$APP_DIR"

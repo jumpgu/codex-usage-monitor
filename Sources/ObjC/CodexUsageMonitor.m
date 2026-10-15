@@ -1439,6 +1439,12 @@ static NSString *BucketCompactValue(NSDictionary *bucket) {
     [header addArrangedSubview:updatedLabel];
     [stack addArrangedSubview:header];
     [stack addArrangedSubview:[self diskPreferenceButton]];
+    if (self.diskMonitoringEnabled) {
+        NSString *value = self.diskSnapshot ? DiskCapacityText([self.diskSnapshot[@"available"] longLongValue]) : (self.diskError ?: @"正在读取…");
+        [stack addArrangedSubview:[self windowRowWithTitle:@"磁盘可用空间" value:value emphasized:NO]];
+        NSButton *details = [NSButton buttonWithTitle:@"磁盘详情" target:self action:@selector(showDiskDetails:)];
+        [stack addArrangedSubview:details];
+    }
     if ([self codexDataIsStale]) {
         NSTextField *warning = [self windowLabelWithString:@"⚠︎ 超过 3 分钟未取得新额度快照或采集失败，当前为旧读数"
             font:[NSFont systemFontOfSize:12] color:NSColor.systemOrangeColor];
@@ -1541,6 +1547,14 @@ static void PrintSummary(NSDictionary *summary) {
 int main(int argc, const char * argv[]) {
     @autoreleasepool {
         NSArray<NSString *> *arguments = NSProcessInfo.processInfo.arguments;
+        if ([arguments containsObject:@"--disk-monitoring=on"] || [arguments containsObject:@"--disk-monitoring=off"]) {
+            BOOL enabled = [arguments containsObject:@"--disk-monitoring=on"];
+            [MonitorPreferences() setBool:enabled forKey:DiskMonitoringPreference];
+            [MonitorPreferences() synchronize];
+            [NSDistributedNotificationCenter.defaultCenter postNotificationName:PreferencesChangedNotification object:nil userInfo:nil deliverImmediately:YES];
+            printf("Disk monitoring: %s\n", [MonitorPreferences() boolForKey:DiskMonitoringPreference] ? "enabled" : "disabled");
+            return 0;
+        }
         if ([arguments containsObject:@"--collect"]) {
             NSError *error = nil;
             NSDictionary *summary = CollectAndSave(&error);

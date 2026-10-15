@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.1.9 - 2026-10-15
+
+- Compress previous app versions instead of leaving indexed app bundles behind after upgrades.
+- Use the app standard preference domain for disk settings and add explicit opt-in/out CLI controls.
+- Show disk capacity and a details shortcut in the resident dashboard.
+
 ## v0.1.8 - 2026-10-15
 
 - Add an opt-in, independent disk menu bar item with capacity details and low-space colors.

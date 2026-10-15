@@ -14,7 +14,9 @@ static NSUserDefaults *MonitorPreferences(void) {
 #ifdef CODEX_USAGE_TESTING
         preferences = [[NSUserDefaults alloc] initWithSuiteName:@"com.gukai.CodexUsage.tests"];
 #else
-        preferences = [[NSUserDefaults alloc] initWithSuiteName:@"com.gukai.CodexUsage"];
+        preferences = [NSBundle.mainBundle.bundleIdentifier isEqualToString:@"com.gukai.CodexUsage"]
+            ? NSUserDefaults.standardUserDefaults
+            : [[NSUserDefaults alloc] initWithSuiteName:@"com.gukai.CodexUsage"];
 #endif
     });
     return preferences;

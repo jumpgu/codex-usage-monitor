@@ -74,7 +74,7 @@
 - 优先安装到 `/Applications/Codex Usage.app`，无写权限时安装到 `~/Applications`
 - 使用仓库中的图标，完成本地签名验证
 - 注册一个登录启动任务并启动菜单栏常驻项
-- 升级时保留旧 App 供恢复
+- 升级时将旧 App 保存为 `~/Library/Application Support/CodexUsage/Backups/` 下的压缩包，供恢复且不产生重复应用图标
 
 安装后只创建一个 LaunchAgent：
 
