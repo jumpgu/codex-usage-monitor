@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.1.13 - 2026-10-20
+
+- Replace the five-color quota scheme with eleven remaining-quota bands, progressing from green to yellow, orange and critical red.
+- Use the same palette for menu bar batteries, dashboard meters and quota labels; remove the unused alternate palette.
+- Test all requested thresholds, neighboring values, clamping and invalid input.
+
 ## v0.1.12 - 2026-10-15
 
 - 将磁盘菜单栏图标和容量文字合并绘制为固定白色图像，避免系统外观覆盖文字颜色。

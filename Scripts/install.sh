@@ -26,7 +26,7 @@ info=dict(CFBundleDevelopmentRegion='zh_CN',CFBundleDisplayName='Codex Usage',
           CFBundleExecutable='CodexUsageMonitor',CFBundleIconFile='AppIcon',
           CFBundleIdentifier='com.gukai.CodexUsage',CFBundleInfoDictionaryVersion='6.0',
           CFBundleName='Codex Usage',CFBundlePackageType='APPL',
-          CFBundleShortVersionString='0.1.12',CFBundleVersion='13',
+          CFBundleShortVersionString='0.1.13',CFBundleVersion='14',
           LSMinimumSystemVersion='13.0',NSHighResolutionCapable=True)
 with open(staged+'/Contents/Info.plist','wb') as f: plistlib.dump(info,f)
 job=dict(Label='com.gukai.CodexUsage.menubar',

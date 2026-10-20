@@ -99,6 +99,23 @@ int main(int argc, const char *argv[]) {
         NSError *capacityError = nil;
         NSDictionary *actualDisk = ReadDiskSnapshot([NSURL fileURLWithPath:NSHomeDirectory()], &capacityError);
         assert(actualDisk && !capacityError && [actualDisk[@"total"] longLongValue] > 0);
+        // Every requested remaining-quota boundary has a distinct semantic color.
+        double quotaLevels[] = {100, 90, 80, 70, 60, 50, 40, 30, 20, 10, 5};
+        NSMutableSet *quotaColors = [NSMutableSet set];
+        for (NSUInteger i = 0; i < sizeof(quotaLevels) / sizeof(quotaLevels[0]); i++) {
+            [quotaColors addObject:UsageColorForRemaining(quotaLevels[i])];
+        }
+        assert(quotaColors.count == 11);
+        double boundaries[] = {5, 10, 20, 30, 40, 50, 60, 70, 80, 90};
+        for (NSUInteger i = 0; i < sizeof(boundaries) / sizeof(boundaries[0]); i++) {
+            double boundary = boundaries[i];
+            assert([UsageColorForRemaining(boundary) isEqual:UsageColorForRemaining(boundary - 0.01)]);
+            assert(![UsageColorForRemaining(boundary) isEqual:UsageColorForRemaining(boundary + 0.01)]);
+        }
+        assert([UsageColorForRemaining(-1) isEqual:UsageColorForRemaining(0)]);
+        assert([UsageColorForRemaining(101) isEqual:UsageColorForRemaining(100)]);
+        assert([UsageColorForRemaining(NAN) isEqual:NSColor.secondaryLabelColor]);
+        assert([UsageColorForRemaining(INFINITY) isEqual:NSColor.secondaryLabelColor]);
         NSRect panel = NSMakeRect(-300, 200, 250, 300);
         NSRect anchor = NSMakeRect(-200, 520, 100, 24);
         assert(!ShouldDismissPopoverClick(NSMakePoint(-150, 350), panel, anchor));
@@ -213,6 +230,6 @@ int main(int argc, const char *argv[]) {
         assert([summary[@"source"][@"filesScanned"] intValue] == 0);
         assert(TokenEventCache().count == 0);
         [NSFileManager.defaultManager removeItemAtPath:root error:nil];
-        puts("PASS: popup outside-click geometry, app-switch close, monitor cleanup, stable disk menu, disk opt-in/no disabled reads, timer cancellation, in-flight result rejection, failed reads, 180-second freshness, weekly window, expired limits, duplicate events, cache invalidation, malformed logs");
+        puts("PASS: 11 quota colors and inclusive thresholds, popup outside-click geometry, app-switch close, monitor cleanup, stable disk menu, disk opt-in/no disabled reads, timer cancellation, in-flight result rejection, failed reads, 180-second freshness, weekly window, expired limits, duplicate events, cache invalidation, malformed logs");
     }
 }

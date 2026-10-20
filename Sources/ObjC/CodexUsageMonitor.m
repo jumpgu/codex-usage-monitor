@@ -217,36 +217,33 @@ static double RemainingPercentValue(id usedValue) {
     return remaining;
 }
 
+// One remaining-quota palette for menu bar batteries, meters and value labels.
+// Thresholds are inclusive: 5% is critical, 10% is red, 90% is the 81-90 band.
 static NSColor *UsageColorForRemaining(double remaining) {
-    if (remaining <= 10) {
-        return NSColor.systemRedColor;
+    if (!isfinite(remaining)) return NSColor.secondaryLabelColor;
+    static const struct { double upper; unsigned int rgb; } bands[] = {
+        {  5, 0xB91C1C }, // critical red
+        { 10, 0xE53935 }, // red
+        { 20, 0xF15524 }, // red-orange
+        { 30, 0xF97316 }, // orange
+        { 40, 0xE38A08 }, // amber
+        { 50, 0xCB920D }, // golden yellow
+        { 60, 0xB2A11B }, // yellow
+        { 70, 0x96AF2B }, // yellow-green
+        { 80, 0x65B83E }, // lime green
+        { 90, 0x32B653 }, // green
+        {100, 0x16A34A }  // plentiful green
+    };
+    double value = MIN(MAX(remaining, 0), 100);
+    for (NSUInteger i = 0; i < sizeof(bands) / sizeof(bands[0]); i++) {
+        if (value <= bands[i].upper) {
+            unsigned int rgb = bands[i].rgb;
+            return [NSColor colorWithSRGBRed:((rgb >> 16) & 255) / 255.0
+                                      green:((rgb >> 8) & 255) / 255.0
+                                       blue:(rgb & 255) / 255.0 alpha:1];
+        }
     }
-    if (remaining <= 20) {
-        return NSColor.systemOrangeColor;
-    }
-    if (remaining <= 50) {
-        return [NSColor colorWithCalibratedRed:0.95 green:0.68 blue:0.05 alpha:1.0];
-    }
-    if (remaining <= 90) {
-        return [NSColor colorWithCalibratedRed:0.10 green:0.74 blue:0.30 alpha:1.0];
-    }
-    return [NSColor colorWithCalibratedRed:0.10 green:0.55 blue:0.95 alpha:1.0];
-}
-
-static NSColor *StatusColorForRemaining(double remaining) {
-    if (remaining <= 10) {
-        return [NSColor colorWithCalibratedRed:1.00 green:0.32 blue:0.28 alpha:1.0];
-    }
-    if (remaining <= 20) {
-        return [NSColor colorWithCalibratedRed:1.00 green:0.58 blue:0.18 alpha:1.0];
-    }
-    if (remaining <= 50) {
-        return [NSColor colorWithCalibratedRed:1.00 green:0.86 blue:0.18 alpha:1.0];
-    }
-    if (remaining <= 90) {
-        return [NSColor colorWithCalibratedRed:0.55 green:1.00 blue:0.62 alpha:1.0];
-    }
-    return [NSColor colorWithCalibratedRed:0.65 green:0.95 blue:1.00 alpha:1.0];
+    return NSColor.secondaryLabelColor;
 }
 
 static NSString *YiTokens(long long tokens, NSInteger digits) {
